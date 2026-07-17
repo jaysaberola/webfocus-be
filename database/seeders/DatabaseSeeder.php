@@ -21,10 +21,15 @@ class DatabaseSeeder extends Seeder
             PermissionSeeder::class,
             RoleSeeder::class,
             UserSeeder::class,
+            CustomerSeeder::class,
             AlbumSeeder::class,
             OptionSeeder::class,
             PageSeeder::class,
+            HomePageGrapesSeeder::class,
+            AboutPageGrapesSeeder::class,
+            FooterPageGrapesSeeder::class,
             MenuSeeder::class,
+            ArticleSeeder::class,
             SettingSeeder::class,
         ]);
     }

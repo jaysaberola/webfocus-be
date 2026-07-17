@@ -17,7 +17,29 @@ class AccountController extends Controller
      */
     public function me(Request $request)
     {
-        return $request->user();
+        $user = $request->user();
+
+        return response()->json(array_merge(
+            $user->only([
+                'id',
+                'fname',
+                'mname',
+                'lname',
+                'email',
+                'mobile',
+                'avatar',
+                'birth_date',
+                'address_street',
+                'address_city',
+                'address_municipality',
+                'address_province',
+                'address_zip',
+            ]),
+            [
+                'role' => $user->getRoleNames()->first(),
+                'roles' => $user->getRoleNames()->values()->all(),
+            ]
+        ));
     }
 
     /**

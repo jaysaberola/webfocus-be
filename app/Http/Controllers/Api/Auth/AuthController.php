@@ -81,4 +81,35 @@ class AuthController extends Controller
             'user' => new LoginResource($user),
         ], 201);
     }
+
+    public function customerLogin(Request $request)
+    {
+        $credentials = $request->validate([
+            'email' => ['required', 'email'],
+            'password' => ['required'],
+        ]);
+
+        if (! Auth::attempt($credentials)) {
+            throw ValidationException::withMessages([
+                'email' => ['Invalid credentials.'],
+            ]);
+        }
+
+        $user = auth()->user();
+
+        if (! $user->hasRole(self::CUSTOMER_ROLE)) {
+            Auth::logout();
+
+            throw ValidationException::withMessages([
+                'email' => ['This account cannot sign in here. Please use the admin portal login.'],
+            ]);
+        }
+
+        $token = $user->createToken('cms-customer')->plainTextToken;
+
+        return response()->json([
+            'token' => $token,
+            'user' => new LoginResource($user),
+        ]);
+    }
 }

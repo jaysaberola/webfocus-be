@@ -28,10 +28,12 @@ use App\Http\Controllers\Api\LayoutPresetController;
 use App\Http\Controllers\Api\WebsiteSettingController;
 use App\Http\Controllers\Api\ArticleCategoryController;
 use App\Http\Controllers\Api\Page\PublicPageController;
+use App\Http\Controllers\Api\PublicDomainController;
 use App\Http\Controllers\Api\PermissionMatrixController;
 
 
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/customer-login', [AuthController::class, 'customerLogin']);
 Route::post('/register-customer', [AuthController::class, 'registerCustomer']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AccountController::class, 'me']);
@@ -234,6 +236,7 @@ Route::get('/public/products', [ProductController::class, 'index']);
 Route::get('/public-product-categories', [ProductCategoryController::class, 'index']);
 Route::get('/public/product-categories', [ProductCategoryController::class, 'index']);
 Route::get('/public/pages/{slug}', [PublicPageController::class, 'show']);
+Route::get('/public/domains/check', [PublicDomainController::class, 'check']);
 Route::get('/public/menus/active', [PublicPageController::class, 'active']);
 Route::get('/public/footer', [PublicPageController::class, 'footer']);
 

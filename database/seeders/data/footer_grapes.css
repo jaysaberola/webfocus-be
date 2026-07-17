@@ -1,0 +1,296 @@
+#wsi-site-footer.wsi-footer,
+.wsi-footer {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(180deg, #04256f 0%, #031b5f 48%, #021845 100%);
+  color: #e2e8f0;
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.wsi-footer-glow {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.22) 0%, transparent 68%);
+  pointer-events: none;
+}
+
+.wsi-footer-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 52px 24px 28px;
+}
+
+.wsi-footer-grid {
+  display: grid;
+  grid-template-columns: 1.25fr 0.8fr 1fr 0.95fr;
+  gap: 32px 28px;
+  align-items: start;
+}
+
+.wsi-footer-logo-link {
+  display: inline-flex;
+  margin-bottom: 18px;
+}
+
+.wsi-footer-logo {
+  height: 42px;
+  width: auto;
+  max-width: 220px;
+  object-fit: contain;
+}
+
+.wsi-footer-contact {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.wsi-footer-contact li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.88rem;
+  line-height: 1.6;
+  color: rgba(226, 232, 240, 0.88);
+}
+
+.wsi-footer-contact a {
+  color: rgba(226, 232, 240, 0.92);
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+
+.wsi-footer-contact a:hover,
+.wsi-footer-contact a:focus {
+  color: #ffffff;
+}
+
+.wsi-footer-icon {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(59, 130, 246, 0.14);
+  color: #93c5fd;
+}
+
+.wsi-footer-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.wsi-footer-heading {
+  margin: 0 0 14px;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+}
+
+.wsi-footer-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.wsi-footer-links a {
+  color: rgba(226, 232, 240, 0.86);
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition: color 0.18s ease, transform 0.18s ease;
+}
+
+.wsi-footer-links a:hover,
+.wsi-footer-links a:focus {
+  color: #ffffff;
+  transform: translateX(3px);
+}
+
+.wsi-footer-award,
+.wsi-footer-trust {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.wsi-footer-award-ring {
+  width: 152px;
+  height: 152px;
+  margin: 0 auto 14px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  padding: 10px;
+}
+
+.wsi-footer-award-ring img {
+  width: 118px;
+  height: 118px;
+  object-fit: contain;
+}
+
+.wsi-footer-award-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.wsi-footer-award-sub {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+.wsi-footer-trust {
+  justify-content: flex-start;
+}
+
+.wsi-footer-trust-badge {
+  width: 152px;
+  height: 152px;
+  margin: 0 auto 14px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wsi-footer-trust-badge img {
+  width: 156px;
+  height: auto;
+  max-height: 72px;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.wsi-footer-trust-caption {
+  margin: 0;
+  max-width: 190px;
+  text-align: center;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: rgba(148, 163, 184, 0.95);
+}
+
+.wsi-footer-social-row {
+  margin-top: 34px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  display: flex;
+  justify-content: center;
+}
+
+.wsi-footer-social {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.wsi-footer-social-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 0.92rem;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.wsi-footer-social-btn:hover,
+.wsi-footer-social-btn:focus {
+  transform: translateY(-2px);
+  opacity: 0.92;
+}
+
+.wsi-footer-social-fb { background: #3b5998; }
+.wsi-footer-social-x { background: #0f172a; border: 1px solid rgba(255,255,255,0.12); }
+.wsi-footer-social-yt { background: #ff0000; }
+.wsi-footer-social-ig {
+  background: linear-gradient(135deg, #f59e0b 0%, #db2777 52%, #2563eb 100%);
+}
+
+.wsi-footer-bottom {
+  margin-top: 18px;
+  text-align: center;
+}
+
+.wsi-footer-bottom p {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #93c5fd;
+}
+
+@media (max-width: 991px) {
+  .wsi-footer-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 28px 20px;
+  }
+
+  .wsi-footer-brand {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .wsi-footer-inner {
+    padding: 40px 18px 24px;
+  }
+
+  .wsi-footer-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .wsi-footer-trust,
+  .wsi-footer-award {
+    align-items: center;
+  }
+
+  .wsi-footer-award-ring {
+    width: 136px;
+    height: 136px;
+  }
+
+  .wsi-footer-award-ring img {
+    width: 106px;
+    height: 106px;
+  }
+
+  .wsi-footer-trust-badge {
+    width: 136px;
+    height: 136px;
+    margin-bottom: 14px;
+  }
+
+  .wsi-footer-trust-badge img {
+    width: 140px;
+    max-height: 64px;
+  }
+}

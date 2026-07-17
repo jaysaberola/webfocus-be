@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\Page;
 
+use App\Support\StorageAssetUrl;
 use Str;
 use App\Models\Menu;
 use App\Models\Page;
@@ -12,7 +13,6 @@ use App\Models\ArticleCategory;
 use App\Mail\ContactMessageMail;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Storage;
 
 class PublicPageController extends Controller
 {
@@ -58,6 +58,10 @@ class PublicPageController extends Controller
             'label'     => $page->label,
             'slug'      => $page->slug,
             'content'   => $page->contents,
+            'content_type' => $page->content_type,
+            'grapes_html' => $page->grapes_html,
+            'grapes_css' => $page->grapes_css,
+            'grapes_js' => $page->grapes_js,
             'page_type' => $page->page_type,
             'template'  => $page->template,
             'image_url' => $page->image_url,
@@ -93,7 +97,8 @@ class PublicPageController extends Controller
                         'description_font_size' => $banner->description_font_size ?? null,
                         'description_bold' => $banner->description_bold ?? null,
                         'alt'         => $banner->alt,
-                        'image_url' => url(Storage::url($banner->image_path)),
+                        'image_path'  => $banner->image_path,
+                        'image_url'   => StorageAssetUrl::publicDisk($banner->image_path),
                         'media_type' => $mediaType,
                         'button_text' => $banner->button_text,
                         'button_font' => $banner->button_font ?? null,
@@ -151,11 +156,31 @@ class PublicPageController extends Controller
             ], 404);
         }
 
+        $hasGrapes = $footer->content_type === 'grapes'
+            || filled($footer->grapes_html)
+            || filled($footer->grapes_css)
+            || filled($footer->grapes_js);
+
+        $contents = $footer->contents;
+        if ($hasGrapes) {
+            $contents = trim((string) ($footer->grapes_html ?? ''));
+            if (filled($footer->grapes_css)) {
+                $contents .= "\n<style>{$footer->grapes_css}</style>";
+            }
+            if (filled($footer->grapes_js)) {
+                $contents .= "\n<script>{$footer->grapes_js}</script>";
+            }
+        }
+
         return response()->json([
             'data' => [
                 'id' => $footer->id,
                 'slug' => $footer->slug,
-                'contents' => $footer->contents,
+                'contents' => $contents,
+                'content_type' => $footer->content_type,
+                'grapes_html' => $footer->grapes_html,
+                'grapes_css' => $footer->grapes_css,
+                'grapes_js' => $footer->grapes_js,
             ]
         ]);
     }

@@ -1,0 +1,673 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+.wsi-about-cms {
+  font-family: 'Inter', sans-serif;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+.wsi-about-cms * {
+  box-sizing: border-box;
+}
+
+.wsi-about-label {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #2563eb;
+  margin-bottom: 0.65rem;
+}
+
+.wsi-about-kicker {
+  display: inline-block;
+  padding: 0.4rem 0.9rem;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: #bfdbfe;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+/* Page hero (replaces site banner) */
+.wsi-about-page-hero {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #0b1f3a 0%, #004b93 52%, #003164 100%);
+  color: #ffffff;
+  padding: clamp(3rem, 8vw, 5rem) 1.5rem clamp(3.5rem, 9vw, 5.5rem);
+}
+
+.wsi-about-page-hero-glow {
+  position: absolute;
+  top: -30%;
+  right: -10%;
+  width: min(520px, 70vw);
+  height: min(520px, 70vw);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(59, 130, 246, 0.35) 0%, transparent 68%);
+  pointer-events: none;
+}
+
+.wsi-about-page-hero-inner {
+  position: relative;
+  z-index: 1;
+  max-width: 760px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.wsi-about-page-hero h1 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(2rem, 5vw, 3.25rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  margin: 0 0 1rem;
+}
+
+.wsi-about-page-hero p {
+  margin: 0 auto;
+  max-width: 620px;
+  font-size: clamp(0.95rem, 1.8vw, 1.0625rem);
+  line-height: 1.75;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* Stats bar */
+.wsi-about-stats-bar {
+  margin-top: -2.5rem;
+  padding: 0 1.25rem;
+  position: relative;
+  z-index: 2;
+}
+
+.wsi-about-stats-bar-inner {
+  max-width: 980px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  background: #ffffff;
+  border-radius: 20px;
+  padding: 1.25rem;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.12);
+  border: 1px solid #e2e8f0;
+}
+
+@media (min-width: 768px) {
+  .wsi-about-stats-bar-inner {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 1.5rem 2rem;
+  }
+}
+
+.wsi-about-stat-item {
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.wsi-about-stat-item strong {
+  display: block;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 800;
+  color: #004b93;
+  line-height: 1.1;
+}
+
+.wsi-about-stat-item span {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+/* Intro */
+.wsi-about-intro {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 3.5rem 1.25rem 2rem;
+}
+
+.wsi-about-intro-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem;
+  align-items: center;
+}
+
+@media (min-width: 992px) {
+  .wsi-about-intro-grid {
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 3rem;
+  }
+}
+
+.wsi-about-intro-copy h2 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  line-height: 1.2;
+  margin: 0 0 1rem;
+  color: #0f172a;
+}
+
+.wsi-about-intro-copy p {
+  margin: 0 0 0.85rem;
+  font-size: 0.9375rem;
+  line-height: 1.8;
+  color: #475569;
+}
+
+.wsi-about-intro-visual {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 280px;
+}
+
+.wsi-about-intro-visual img {
+  max-width: min(100%, 320px);
+  height: auto;
+  filter: drop-shadow(0 16px 32px rgba(15, 23, 42, 0.12));
+}
+
+.wsi-about-intro-visual-card {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  max-width: 240px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 1rem 1.1rem;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.1);
+}
+
+.wsi-about-intro-visual-card span {
+  display: block;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #2563eb;
+  margin-bottom: 0.25rem;
+}
+
+.wsi-about-intro-visual-card strong {
+  display: block;
+  font-size: 0.9375rem;
+  color: #0f172a;
+  margin-bottom: 0.35rem;
+}
+
+.wsi-about-intro-visual-card p {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.55;
+  color: #64748b;
+}
+
+/* Section heads */
+.wsi-about-head {
+  max-width: 42rem;
+  margin: 0 auto 2rem;
+  text-align: center;
+}
+
+.wsi-about-head h2 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  margin: 0;
+  color: #0f172a;
+}
+
+.wsi-about-head p {
+  margin: 0.65rem 0 0;
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: #64748b;
+}
+
+.wsi-about-head-light h2,
+.wsi-about-head-light p {
+  color: inherit;
+}
+
+/* Services */
+.wsi-about-services {
+  background: #f8fafc;
+  padding: 3.5rem 1.25rem;
+}
+
+.wsi-about-services-grid {
+  max-width: 72rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .wsi-about-services-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .wsi-about-services-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.wsi-about-service {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 18px;
+  padding: 1.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 100%;
+  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+
+.wsi-about-service:hover {
+  transform: translateY(-5px);
+  border-color: #93c5fd;
+  box-shadow: 0 16px 40px rgba(37, 99, 235, 0.1);
+}
+
+.wsi-about-service-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.wsi-about-service-icon {
+  width: 2.35rem;
+  height: 2.35rem;
+  flex-shrink: 0;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #004b93, #2563eb);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wsi-about-service-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.wsi-about-service h3 {
+  margin: 0.15rem 0 0;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  line-height: 1.35;
+  color: #0f172a;
+}
+
+.wsi-about-service p {
+  margin: 0;
+  flex: 1 1 auto;
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  color: #64748b;
+}
+
+.wsi-about-service a {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #2563eb !important;
+  text-decoration: none;
+}
+
+.wsi-about-service a:hover {
+  color: #ea580c !important;
+}
+
+/* Mission & Vision */
+.wsi-about-mv {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 3.5rem 1.25rem;
+}
+
+.wsi-about-mv-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+@media (min-width: 768px) {
+  .wsi-about-mv-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.wsi-about-mv-card {
+  border-radius: 20px;
+  padding: 1.75rem;
+  border: 1px solid #e2e8f0;
+}
+
+.wsi-about-mission {
+  background: linear-gradient(180deg, #f0f7ff 0%, #ffffff 100%);
+  border-color: #bfdbfe;
+}
+
+.wsi-about-vision {
+  background: linear-gradient(180deg, #fff7ed 0%, #ffffff 100%);
+  border-color: #fed7aa;
+}
+
+.wsi-about-mv-card ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wsi-about-mv-card li {
+  position: relative;
+  padding-left: 1.1rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: #475569;
+}
+
+.wsi-about-mv-card li:last-child {
+  margin-bottom: 0;
+}
+
+.wsi-about-mv-card li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.6rem;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: #2563eb;
+}
+
+.wsi-about-vision li::before {
+  background: #ea580c;
+}
+
+/* Values */
+.wsi-about-values {
+  background: linear-gradient(135deg, #0b1f3a 0%, #004b93 100%);
+  color: #ffffff;
+  padding: 3.5rem 1.25rem;
+}
+
+.wsi-about-head-light .wsi-about-label {
+  color: #93c5fd;
+}
+
+.wsi-about-head-light h2 {
+  color: #ffffff;
+}
+
+.wsi-about-head-light p {
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.wsi-about-values-grid {
+  max-width: 72rem;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.85rem;
+}
+
+@media (min-width: 640px) {
+  .wsi-about-values-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1100px) {
+  .wsi-about-values-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.wsi-about-values-grid article {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  padding: 1.15rem;
+  backdrop-filter: blur(6px);
+  transition: background 0.25s ease, transform 0.25s ease;
+}
+
+.wsi-about-values-grid article:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: translateY(-3px);
+}
+
+.wsi-about-values-grid h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.wsi-about-values-grid p {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+/* CEO */
+.wsi-about-ceo {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 3.5rem 1.25rem 2rem;
+}
+
+.wsi-about-ceo-inner {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 24px;
+  padding: clamp(2rem, 4vw, 3rem);
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.06);
+}
+
+.wsi-about-ceo-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.35rem;
+}
+
+.wsi-about-ceo-avatar {
+  width: 4rem;
+  height: 4rem;
+  border-radius: 9999px;
+  background: #004b93;
+  color: #ffffff;
+  font-weight: 800;
+  font-size: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(0, 75, 147, 0.25);
+  margin-bottom: 0.35rem;
+}
+
+.wsi-about-ceo-header h3 {
+  margin: 0;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.wsi-about-ceo-title {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.wsi-about-ceo-badge {
+  display: inline-block;
+  margin-top: 0.65rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 9999px;
+  background: #eff6ff;
+  color: #004b93;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wsi-about-ceo-message {
+  margin: 0;
+  padding: 1.5rem 0 0;
+  border: 0;
+  border-top: 1px solid #f1f5f9;
+  margin-top: 1.25rem;
+}
+
+.wsi-about-ceo-message p {
+  margin: 0 0 1rem;
+  font-size: clamp(0.8125rem, 1.6vw, 0.9375rem);
+  line-height: 1.75;
+  color: #475569;
+}
+
+.wsi-about-ceo-message footer {
+  display: block;
+  padding-top: 0.5rem;
+  font-size: clamp(0.8125rem, 1.6vw, 0.9375rem);
+  font-weight: 700;
+  line-height: 1.65;
+  color: #0f172a;
+  text-align: center;
+}
+
+/* CTA */
+.wsi-about-cta {
+  max-width: 56rem;
+  margin: 0 auto 3rem;
+  padding: 0 1.25rem;
+}
+
+.wsi-about-cta-inner {
+  background: linear-gradient(135deg, #0f172a 0%, #003164 100%);
+  border-radius: 24px;
+  padding: clamp(2rem, 4vw, 2.5rem);
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+}
+
+.wsi-about-cta h2 {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 1.25rem;
+  margin: 0 0 0.55rem;
+  color: #ffffff;
+}
+
+.wsi-about-cta p {
+  margin: 0 auto 1.25rem;
+  max-width: 32rem;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.wsi-about-cta a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1.5rem;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #ffffff !important;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.wsi-about-cta a:hover {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+  color: #ffffff !important;
+}
+
+@media (max-width: 639px) {
+  .wsi-about-intro-visual-card {
+    position: static;
+    margin-top: 1rem;
+    max-width: 100%;
+  }
+}
+
+/* Scroll reveal + hero motion */
+@keyframes wsiAboutGlowPulse {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+.wsi-about-page-hero-glow {
+  animation: wsiAboutGlowPulse 8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .wsi-reveal {
+    opacity: 0;
+    transition:
+      opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+    transition-delay: var(--wsi-reveal-delay, 0ms);
+    will-change: opacity, transform;
+  }
+
+  .wsi-reveal-up { transform: translateY(36px); }
+  .wsi-reveal-down { transform: translateY(-24px); }
+  .wsi-reveal-left { transform: translateX(-36px); }
+  .wsi-reveal-right { transform: translateX(36px); }
+  .wsi-reveal-scale { transform: scale(0.94); }
+  .wsi-reveal-fade { transform: none; }
+
+  .wsi-reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wsi-about-page-hero-glow {
+    animation: none;
+  }
+
+  .wsi-reveal {
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+}
