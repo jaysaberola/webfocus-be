@@ -5,6 +5,32 @@ use Illuminate\Http\Request;
 
 define('LARAVEL_START', microtime(true));
 
+// cPanel/PHP-FPM often strips Authorization — restore from known fallbacks
+if (empty($_SERVER['HTTP_AUTHORIZATION'])) {
+    if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+        $_SERVER['HTTP_AUTHORIZATION'] = $_SERVER['REDIRECT_HTTP_AUTHORIZATION'];
+    } elseif (function_exists('getallheaders')) {
+        $allHeaders = getallheaders();
+        foreach ($allHeaders as $name => $value) {
+            if (strtolower($name) === 'authorization') {
+                $_SERVER['HTTP_AUTHORIZATION'] = $value;
+                break;
+            }
+        }
+        if (empty($_SERVER['HTTP_AUTHORIZATION'])) {
+            foreach ($allHeaders as $name => $value) {
+                if (strtolower($name) === 'x-api-token') {
+                    $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer '.$value;
+                    break;
+                }
+            }
+        }
+    }
+    if (empty($_SERVER['HTTP_AUTHORIZATION']) && !empty($_SERVER['HTTP_X_API_TOKEN'])) {
+        $_SERVER['HTTP_AUTHORIZATION'] = 'Bearer '.$_SERVER['HTTP_X_API_TOKEN'];
+    }
+}
+
 /*
 |--------------------------------------------------------------------------
 | Check If The Application Is Under Maintenance
