@@ -29,6 +29,9 @@ use App\Http\Controllers\Api\WebsiteSettingController;
 use App\Http\Controllers\Api\ArticleCategoryController;
 use App\Http\Controllers\Api\Page\PublicPageController;
 use App\Http\Controllers\Api\PublicDomainController;
+use App\Http\Controllers\Api\PublicHostingController;
+use App\Http\Controllers\Api\PublicLegalController;
+use App\Http\Controllers\Api\PublicFreshchatController;
 use App\Http\Controllers\Api\PermissionMatrixController;
 
 
@@ -237,6 +240,10 @@ Route::get('/public-product-categories', [ProductCategoryController::class, 'ind
 Route::get('/public/product-categories', [ProductCategoryController::class, 'index']);
 Route::get('/public/pages/{slug}', [PublicPageController::class, 'show']);
 Route::get('/public/domains/check', [PublicDomainController::class, 'check']);
+Route::get('/public/hosting/plans', [PublicHostingController::class, 'plans']);
+Route::get('/public/hosting/addons', [PublicHostingController::class, 'addons']);
+Route::get('/public/legal/privacy', [PublicLegalController::class, 'privacy']);
+Route::get('/public/freshchat', [PublicFreshchatController::class, 'show']);
 Route::get('/public/menus/active', [PublicPageController::class, 'active']);
 Route::get('/public/footer', [PublicPageController::class, 'footer']);
 

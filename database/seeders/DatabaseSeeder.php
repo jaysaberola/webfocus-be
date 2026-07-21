@@ -30,7 +30,9 @@ class DatabaseSeeder extends Seeder
             FooterPageGrapesSeeder::class,
             MenuSeeder::class,
             ArticleSeeder::class,
+            HostingCatalogSeeder::class,
             SettingSeeder::class,
+            DataPrivacySeeder::class,
         ]);
     }
 }

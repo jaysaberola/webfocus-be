@@ -22,7 +22,18 @@ class WebsiteSettingController extends Controller
     ========================= */
     public function show()
     {
-        $dataPrivacy = Page::where('slug', 'data-privacy')->firstOrFail();
+        $dataPrivacy = Page::firstOrCreate(
+            ['slug' => 'data-privacy'],
+            [
+                'name' => 'Privacy Policy',
+                'label' => 'Privacy Policy',
+                'contents' => '',
+                'content_type' => 'grapes',
+                'status' => 'published',
+                'page_type' => 'default',
+                'user_id' => 1,
+            ]
+        );
 
         return response()->json([
             'setting' => $this->setting(),
@@ -108,6 +119,9 @@ class WebsiteSettingController extends Controller
             'data_privacy_title' => 'required|string',
             'data_privacy_popup_content' => 'required|string',
             'data_privacy_content' => 'required|string',
+            'grapes_html' => 'nullable|string',
+            'grapes_css' => 'nullable|string',
+            'grapes_js' => 'nullable|string',
         ]);
 
         DB::transaction(function () use ($request) {
@@ -118,11 +132,25 @@ class WebsiteSettingController extends Controller
                 'data_privacy_content',
             ]));
 
-            $dataPrivacy = Page::where('slug', 'data-privacy')->firstOrFail();
+            $dataPrivacy = Page::firstOrCreate(
+                ['slug' => 'data-privacy'],
+                [
+                    'name' => $request->data_privacy_title,
+                    'label' => $request->data_privacy_title,
+                    'status' => 'published',
+                    'page_type' => 'default',
+                    'user_id' => 1,
+                ]
+            );
 
             $dataPrivacy->update([
-                "name" => $request->data_privacy_title,
-                "contents" => $request->data_privacy_content,
+                'name' => $request->data_privacy_title,
+                'label' => $request->data_privacy_title,
+                'contents' => $request->data_privacy_content,
+                'grapes_html' => $request->input('grapes_html', $request->data_privacy_content),
+                'grapes_css' => $request->input('grapes_css', ''),
+                'grapes_js' => $request->input('grapes_js', ''),
+                'content_type' => 'grapes',
             ]);
         });
 

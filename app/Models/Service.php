@@ -12,8 +12,10 @@ class Service extends Model
 
     protected $fillable = [
         'name',
+        'slug',
         'price',
         'description',
+        'metadata',
         'status',
         'is_active',
         'category_id',
@@ -23,6 +25,7 @@ class Service extends Model
     protected $casts = [
         'price' => 'decimal:2',
         'is_active' => 'boolean',
+        'metadata' => 'array',
     ];
 
     protected $appends = [
