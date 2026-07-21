@@ -93,7 +93,6 @@
             '</button>' +
           '</div>' +
           '<span class="wsi-portfolio-modal-counter"></span>' +
-          '<span class="wsi-portfolio-modal-hint">Scroll to view full page</span>' +
         '</div>' +
       '</div>';
 
