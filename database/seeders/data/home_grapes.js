@@ -3,54 +3,7 @@
   window.__wsiHomeCmsInit = true;
 
   function initWsiHomeSlider() {
-    var track = document.getElementById('wsi-slider-track');
-    var prevBtn = document.getElementById('wsi-slider-prev');
-    var nextBtn = document.getElementById('wsi-slider-next');
-    if (!track || !prevBtn || !nextBtn || !track.firstElementChild) return;
-
-    var row = track.firstElementChild;
-    var slides = row.children;
-    if (!slides.length) return;
-
-    var currentSlide = 0;
-    var autoplayTimer = null;
-
-    function scrollToSlide() {
-      var slide = slides[currentSlide];
-      if (!slide) return;
-      track.scrollLeft = slide.offsetLeft - row.offsetLeft;
-    }
-
-    function nextSlide() {
-      currentSlide = (currentSlide + 1) % slides.length;
-      scrollToSlide();
-    }
-
-    function prevSlide() {
-      currentSlide = (currentSlide - 1 + slides.length) % slides.length;
-      scrollToSlide();
-    }
-
-    function resetAutoplay() {
-      if (autoplayTimer) clearInterval(autoplayTimer);
-      autoplayTimer = null;
-    }
-
-    nextBtn.addEventListener('click', function (event) {
-      event.stopPropagation();
-      resetAutoplay();
-      nextSlide();
-    });
-
-    prevBtn.addEventListener('click', function (event) {
-      event.stopPropagation();
-      resetAutoplay();
-      prevSlide();
-    });
-
-    window.addEventListener('resize', scrollToSlide);
-    autoplayTimer = setInterval(nextSlide, 4000);
-    scrollToSlide();
+    /* Legacy slider replaced by CSS marquee (.wsi-brand-marquee-shell). */
   }
 
   function initPortfolioPreview() {
@@ -289,7 +242,7 @@
     initPortfolioPreview();
     initScrollReveal('#wsi-home-cms', [
       { selector: '.wsi-section-heading', variant: 'up' },
-      { selector: '.wsi-slider-wrap', variant: 'up', delay: 120 },
+      { selector: '.wsi-slider-wrap', variant: 'fade', delay: 120 },
       { selector: '.wsi-clients-cta', variant: 'fade', delay: 220 },
       { selector: '.wsi-portfolio-card', variant: 'up', stagger: true, staggerStep: 80 },
       { selector: '.wsi-benefit-card', variant: 'up', stagger: true, staggerStep: 100 },

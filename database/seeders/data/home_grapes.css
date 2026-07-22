@@ -80,9 +80,58 @@
   margin: 0 auto;
 }
 
-.wsi-slider-wrap {
+.wsi-slider-wrap,
+.wsi-brand-marquee-shell {
   max-width: 64rem;
   margin: 0 auto;
+}
+
+.wsi-brand-marquee-shell {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.wsi-brand-marquee-viewport {
+  overflow-x: hidden;
+  width: 100%;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
+}
+
+.wsi-brand-marquee-track {
+  display: flex;
+  width: max-content;
+}
+
+.wsi-brand-marquee-group {
+  display: flex;
+  align-items: center;
+  gap: clamp(2rem, 5vw, 4rem);
+  padding-right: clamp(2rem, 5vw, 4rem);
+}
+
+.wsi-brand-marquee-group .wsi-brand-cell {
+  flex:  0 0 auto;
+  width: clamp(118px, 16vw, 176px);
+  height: 5rem;
+}
+
+@media (min-width: 768px) {
+  .wsi-brand-marquee-group .wsi-brand-cell {
+    height: 6rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wsi-brand-marquee-viewport {
+    overflow-x: auto;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+
+  .wsi-brand-marquee-group[aria-hidden="true"] {
+    display: none;
+  }
 }
 
 .wsi-slider-controls {

@@ -119,6 +119,8 @@
   font-weight: 800;
   color: #004b93;
   line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  min-height: 1.1em;
 }
 
 .wsi-about-stat-item span {
@@ -177,8 +179,12 @@
 }
 
 .wsi-about-intro-visual img {
+  display: block;
+  width: auto;
   max-width: min(100%, 320px);
   height: auto;
+  object-fit: contain;
+  object-position: center;
   filter: drop-shadow(0 16px 32px rgba(15, 23, 42, 0.12));
 }
 
@@ -627,36 +633,31 @@
   }
 }
 
-/* Scroll reveal + hero motion */
-@keyframes wsiAboutGlowPulse {
-  0%, 100% { transform: scale(1); opacity: 0.85; }
-  50% { transform: scale(1.08); opacity: 1; }
-}
-
+/* Scroll reveal — opacity only to avoid layout shift */
 .wsi-about-page-hero-glow {
-  animation: wsiAboutGlowPulse 8s ease-in-out infinite;
+  animation: none;
 }
 
 @media (prefers-reduced-motion: no-preference) {
   .wsi-reveal {
     opacity: 0;
-    transition:
-      opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1),
-      transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1);
     transition-delay: var(--wsi-reveal-delay, 0ms);
-    will-change: opacity, transform;
+    transform: none !important;
   }
 
-  .wsi-reveal-up { transform: translateY(36px); }
-  .wsi-reveal-down { transform: translateY(-24px); }
-  .wsi-reveal-left { transform: translateX(-36px); }
-  .wsi-reveal-right { transform: translateX(36px); }
-  .wsi-reveal-scale { transform: scale(0.94); }
-  .wsi-reveal-fade { transform: none; }
+  .wsi-reveal-up,
+  .wsi-reveal-down,
+  .wsi-reveal-left,
+  .wsi-reveal-right,
+  .wsi-reveal-scale,
+  .wsi-reveal-fade {
+    transform: none !important;
+  }
 
   .wsi-reveal.is-visible {
     opacity: 1;
-    transform: none;
+    transform: none !important;
   }
 }
 

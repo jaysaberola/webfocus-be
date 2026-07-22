@@ -2,32 +2,22 @@
   if (window.__wsiAboutCmsInit) return;
   window.__wsiAboutCmsInit = true;
 
-  function animateCounter(el) {
+  function setCounterFinal(el) {
     var target = parseFloat(el.getAttribute('data-target') || '0');
     var suffix = el.getAttribute('data-suffix') || '';
     var decimals = parseInt(el.getAttribute('data-decimals') || '0', 10);
-    var duration = 1400;
-    var start = 0;
-    var startTime = null;
 
-    function frame(timestamp) {
-      if (!startTime) startTime = timestamp;
-      var progress = Math.min((timestamp - startTime) / duration, 1);
-      var eased = 1 - Math.pow(1 - progress, 3);
-      var value = start + (target - start) * eased;
-
-      if (decimals > 0) {
-        el.textContent = value.toFixed(decimals) + suffix;
-      } else {
-        el.textContent = Math.round(value) + suffix;
-      }
-
-      if (progress < 1) {
-        window.requestAnimationFrame(frame);
-      }
+    if (decimals > 0) {
+      el.textContent = target.toFixed(decimals) + suffix;
+    } else {
+      el.textContent = Math.round(target) + suffix;
     }
+  }
 
-    window.requestAnimationFrame(frame);
+  function initAboutCounters() {
+    var counters = document.querySelectorAll('.wsi-about-counter');
+    if (!counters.length) return;
+    counters.forEach(setCounterFinal);
   }
 
   function prefersReducedMotion() {
@@ -88,61 +78,24 @@
     if (!hero) return;
 
     var children = hero.children;
-    Array.prototype.forEach.call(children, function (child, index) {
-      child.classList.add('wsi-reveal', 'wsi-reveal-up');
-      child.style.setProperty('--wsi-reveal-delay', index * 130 + 'ms');
-
-      if (prefersReducedMotion()) {
-        child.classList.add('is-visible');
-        return;
-      }
-
-      window.requestAnimationFrame(function () {
-        window.requestAnimationFrame(function () {
-          child.classList.add('is-visible');
-        });
-      });
-    });
-  }
-
-  function initAboutCounters() {
-    var counters = document.querySelectorAll('.wsi-about-counter');
-    if (!counters.length) return;
-
-    if (!('IntersectionObserver' in window)) {
-      counters.forEach(animateCounter);
-      return;
-    }
-
-    var observer = new IntersectionObserver(
-      function (entries, obs) {
-        entries.forEach(function (entry) {
-          if (!entry.isIntersecting) return;
-          animateCounter(entry.target);
-          obs.unobserve(entry.target);
-        });
-      },
-      { threshold: 0.35 }
-    );
-
-    counters.forEach(function (counter) {
-      observer.observe(counter);
+    Array.prototype.forEach.call(children, function (child) {
+      child.classList.add('wsi-reveal', 'wsi-reveal-fade', 'is-visible');
     });
   }
 
   function initAboutPage() {
     initAboutHeroReveal();
     initScrollReveal('#wsi-about-cms', [
-      { selector: '.wsi-about-stats-bar-inner', variant: 'scale' },
-      { selector: '.wsi-about-intro-copy', variant: 'left' },
-      { selector: '.wsi-about-intro-visual', variant: 'right' },
-      { selector: '.wsi-about-head', variant: 'up' },
-      { selector: '.wsi-about-service', variant: 'up', stagger: true, staggerStep: 90 },
-      { selector: '.wsi-about-mission', variant: 'left' },
-      { selector: '.wsi-about-vision', variant: 'right' },
-      { selector: '.wsi-about-values-grid article', variant: 'up', stagger: true, staggerStep: 70 },
-      { selector: '.wsi-about-ceo-inner', variant: 'up' },
-      { selector: '.wsi-about-cta-inner', variant: 'scale', delay: 80 },
+      { selector: '.wsi-about-stats-bar-inner', variant: 'fade' },
+      { selector: '.wsi-about-intro-copy', variant: 'fade' },
+      { selector: '.wsi-about-intro-visual', variant: 'fade' },
+      { selector: '.wsi-about-head', variant: 'fade' },
+      { selector: '.wsi-about-service', variant: 'fade', stagger: true, staggerStep: 90 },
+      { selector: '.wsi-about-mission', variant: 'fade' },
+      { selector: '.wsi-about-vision', variant: 'fade' },
+      { selector: '.wsi-about-values-grid article', variant: 'fade', stagger: true, staggerStep: 70 },
+      { selector: '.wsi-about-ceo-inner', variant: 'fade' },
+      { selector: '.wsi-about-cta-inner', variant: 'fade', delay: 80 },
     ]);
     initAboutCounters();
   }

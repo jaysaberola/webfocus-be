@@ -26,7 +26,7 @@ class MenuSeeder extends Seeder
                         'id' => 2,
                         'label' => 'About',
                         'type' => 'page',
-                        'target' => '/public/about',
+                        'target' => '/public/about-us',
                         'children' => [],
                     ],
                     [
