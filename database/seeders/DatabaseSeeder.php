@@ -33,6 +33,7 @@ class DatabaseSeeder extends Seeder
             HostingCatalogSeeder::class,
             SettingSeeder::class,
             DataPrivacySeeder::class,
+            CustomerPortalSeeder::class,
         ]);
     }
 }

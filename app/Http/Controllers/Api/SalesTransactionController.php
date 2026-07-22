@@ -5,6 +5,8 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Services\CustomerPortalProvisioner;
+use App\Services\CustomerPortalNotificationSync;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -56,6 +58,10 @@ class SalesTransactionController extends Controller
             return $transaction;
         });
 
+        if ($transaction->customer_id) {
+            app(CustomerPortalProvisioner::class)->provisionFromTransaction($transaction->fresh(['items']));
+        }
+
         return response()->json([
             'message' => 'Sales transaction created successfully',
             'data' => $transaction->load(['customer:id,fname,lname,email', 'items']),
@@ -85,6 +91,10 @@ class SalesTransactionController extends Controller
                 $this->syncItems($salesTransaction, $items);
             }
         });
+
+        if ($salesTransaction->customer_id) {
+            app(CustomerPortalProvisioner::class)->refreshServicesFromTransaction($salesTransaction->fresh(['items']));
+        }
 
         return response()->json([
             'message' => 'Sales transaction updated successfully',

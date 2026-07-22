@@ -33,6 +33,7 @@ use App\Http\Controllers\Api\PublicHostingController;
 use App\Http\Controllers\Api\PublicLegalController;
 use App\Http\Controllers\Api\PublicFreshchatController;
 use App\Http\Controllers\Api\PermissionMatrixController;
+use App\Http\Controllers\Api\CustomerPortalController;
 
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -43,6 +44,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/user/profile', [AccountController::class, 'updateProfile']);
     Route::put('/user/email', [AccountController::class, 'updateEmail']);
     Route::put('/user/password', [AccountController::class, 'updatePassword']);
+
+    Route::prefix('customer/portal')->group(function () {
+        Route::get('/overview', [CustomerPortalController::class, 'overview']);
+        Route::get('/services', [CustomerPortalController::class, 'services']);
+        Route::get('/orders', [CustomerPortalController::class, 'orders']);
+        Route::get('/billing', [CustomerPortalController::class, 'billing']);
+        Route::post('/billing/pay', [CustomerPortalController::class, 'payInvoice']);
+        Route::post('/billing/add-funds', [CustomerPortalController::class, 'addFunds']);
+        Route::get('/notifications', [CustomerPortalController::class, 'notifications']);
+        Route::get('/notifications/unread-count', [CustomerPortalController::class, 'unreadNotificationCount']);
+        Route::patch('/notifications/{notification}/read', [CustomerPortalController::class, 'markNotificationRead']);
+        Route::get('/tickets', [CustomerPortalController::class, 'tickets']);
+        Route::post('/tickets', [CustomerPortalController::class, 'storeTicket']);
+    });
 
     // dashboard
     Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
