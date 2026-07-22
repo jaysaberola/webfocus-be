@@ -65,6 +65,36 @@ php artisan config:cache
 chmod -R 775 storage bootstrap/cache
 ```
 
+## 2b. Run database migrations (required for checkout + customer portal)
+
+Vercel only hosts the **frontend**. Checkout and the customer portal save data in the **MySQL database on cPanel**.
+If you see errors like `Table '...sales_transaction_items' doesn't exist`, migrations were not run on production.
+
+SSH or cPanel **Terminal**, from the backend folder:
+
+```bash
+cd /home/webfocusprod/cms4.webfocusprod.wsiph2.com/webfocus-be
+
+# Checkout / orders (fixes "sales_transaction_items doesn't exist")
+php artisan migrate --path=database/migrations/2026_04_29_000002_create_sales_transactions_table.php --force
+php artisan migrate --path=database/migrations/2026_05_10_000004_create_sales_transaction_items_table.php --force
+
+# Customer portal (services, notifications, support tickets)
+php artisan migrate --path=database/migrations/2026_07_22_000001_create_customer_portal_tables.php --force
+php artisan migrate --path=database/migrations/2026_07_22_000002_add_reference_key_to_customer_notifications.php --force
+php artisan migrate --path=database/migrations/2026_07_22_000003_create_customer_payment_proofs_table.php --force
+```
+
+If a migration says the table **already exists**, skip that line and run the next one.
+
+Optional demo data (staging only):
+
+```bash
+php artisan db:seed --class=CustomerPortalSeeder --force
+```
+
+After migrations, retry checkout on Vercel — **Proceed to Paynamics** should create the order without SQL errors.
+
 ## 3. Verify (before testing Vercel login)
 
 | URL | Expected |

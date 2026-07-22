@@ -52,9 +52,13 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/billing', [CustomerPortalController::class, 'billing']);
         Route::post('/billing/pay', [CustomerPortalController::class, 'payInvoice']);
         Route::post('/billing/add-funds', [CustomerPortalController::class, 'addFunds']);
+        Route::post('/billing/payment-proofs', [CustomerPortalController::class, 'uploadPaymentProof']);
+        Route::delete('/billing/payment-proofs/{paymentProof}', [CustomerPortalController::class, 'deletePaymentProof']);
         Route::get('/notifications', [CustomerPortalController::class, 'notifications']);
         Route::get('/notifications/unread-count', [CustomerPortalController::class, 'unreadNotificationCount']);
+        Route::patch('/notifications/read-all', [CustomerPortalController::class, 'markAllNotificationsRead']);
         Route::patch('/notifications/{notification}/read', [CustomerPortalController::class, 'markNotificationRead']);
+        Route::delete('/notifications/{notification}', [CustomerPortalController::class, 'deleteNotification']);
         Route::get('/tickets', [CustomerPortalController::class, 'tickets']);
         Route::post('/tickets', [CustomerPortalController::class, 'storeTicket']);
     });

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomerNotification;
+use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
@@ -12,7 +13,9 @@ use App\Models\User;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class CustomerPortalController extends Controller
 {
@@ -104,28 +107,92 @@ class CustomerPortalController extends Controller
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
             ->with('items')
+            ->when($request->filled('date_from'), fn ($q) => $q->whereDate('transacted_at', '>=', $request->input('date_from')))
+            ->when($request->filled('date_to'), fn ($q) => $q->whereDate('transacted_at', '<=', $request->input('date_to')))
+            ->latest('transacted_at')
+            ->get();
+
+        $allTransactions = SalesTransaction::query()
+            ->where('customer_id', $customer->id)
+            ->with('items')
             ->latest('transacted_at')
             ->get();
 
         $invoices = $transactions->map(fn (SalesTransaction $row) => $this->mapInvoice($row))->values();
+        $reminder = $this->buildBillingReminder($allTransactions);
 
-        $pending = $transactions->first(fn ($row) => !in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true));
-
-        $reminder = $pending ? [
-            'invoiceId' => $this->invoiceId($pending),
-            'transactionNo' => $pending->transaction_no,
-            'title' => $pending->items->first()?->name ?? $pending->transaction_no,
-            'dueDate' => optional($pending->transacted_at?->copy()->addDays(30))->format('F j, Y'),
-            'amount' => (float) $pending->grand_total,
-        ] : null;
+        $paymentProofs = CustomerPaymentProof::query()
+            ->where('customer_id', $customer->id)
+            ->latest()
+            ->get()
+            ->map(fn (CustomerPaymentProof $proof) => $this->mapPaymentProof($proof))
+            ->values();
 
         return response()->json([
             'data' => [
                 'invoices' => $invoices,
                 'reminder' => $reminder,
-                'paymentProofs' => [],
+                'paymentProofs' => $paymentProofs,
             ],
         ]);
+    }
+
+    public function uploadPaymentProof(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+
+        $validated = $request->validate([
+            'invoice_id' => ['required', 'string', 'max:120'],
+            'notes' => ['nullable', 'string', 'max:500'],
+            'receipt' => ['required', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:5120'],
+        ]);
+
+        $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
+        $this->assertInvoicePayable($transaction);
+
+        $file = $request->file('receipt');
+        $path = $file->store('customer-payment-proofs/' . $customer->id, 'public');
+
+        $proof = CustomerPaymentProof::create([
+            'customer_id' => $customer->id,
+            'sales_transaction_id' => $transaction->id,
+            'proof_no' => $this->generatePaymentProofNo(),
+            'invoice_id' => $this->invoiceId($transaction),
+            'file_path' => $path,
+            'file_name' => $file->getClientOriginalName(),
+            'status' => 'Pending Review',
+            'notes' => $validated['notes'] ?? null,
+        ]);
+
+        CustomerNotification::create([
+            'customer_id' => $customer->id,
+            'title' => 'Payment Proof Uploaded',
+            'body' => 'We received your payment proof for ' . $proof->invoice_id . '. Our billing team will verify it shortly.',
+            'type' => 'billing',
+            'action_url' => '/public/dashboard?tab=billing',
+        ]);
+
+        app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+
+        return response()->json([
+            'message' => 'Payment proof uploaded successfully',
+            'data' => $this->mapPaymentProof($proof),
+        ], 201);
+    }
+
+    public function deletePaymentProof(Request $request, CustomerPaymentProof $paymentProof)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $paymentProof->customer_id === (int) $customer->id, 403);
+        abort_if($paymentProof->status === 'Verified & Credited', 422, 'Verified payment proofs cannot be deleted.');
+
+        if ($paymentProof->file_path && Storage::disk('public')->exists($paymentProof->file_path)) {
+            Storage::disk('public')->delete($paymentProof->file_path);
+        }
+
+        $paymentProof->delete();
+
+        return response()->json(['message' => 'Payment proof deleted']);
     }
 
     public function notifications(Request $request)
@@ -176,6 +243,28 @@ class CustomerPortalController extends Controller
         }
 
         return response()->json(['message' => 'Notification marked as read']);
+    }
+
+    public function markAllNotificationsRead(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+
+        CustomerNotification::query()
+            ->where('customer_id', $customer->id)
+            ->whereNull('read_at')
+            ->update(['read_at' => now()]);
+
+        return response()->json(['message' => 'All notifications marked as read']);
+    }
+
+    public function deleteNotification(Request $request, CustomerNotification $notification)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $notification->customer_id === (int) $customer->id, 403);
+
+        $notification->delete();
+
+        return response()->json(['message' => 'Notification dismissed']);
     }
 
     public function tickets(Request $request)
@@ -244,6 +333,7 @@ class CustomerPortalController extends Controller
 
         $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
         $this->assertInvoicePayable($transaction);
+        $this->assertInvoiceCanPay($transaction);
 
         $paymentLabel = $this->formatPaymentMethodLabel($validated['payment_method']);
         $paymentGateway = $this->formatPaymentMethodGateway($validated['payment_method']);
@@ -359,8 +449,9 @@ class CustomerPortalController extends Controller
 
     private function mapOrder(SalesTransaction $row): array
     {
+        $firstItem = $row->items->first();
         $items = $row->items->map(fn ($item) => [
-            'name' => $item->name,
+            'name' => $this->resolveInvoiceServiceName($item->name, $item->item_type),
             'detail' => $item->name,
             'price' => (float) $item->total_price,
         ])->values()->all();
@@ -372,6 +463,8 @@ class CustomerPortalController extends Controller
 
         return [
             'id' => $row->transaction_no,
+            'invoiceId' => $this->invoiceId($row),
+            'serviceName' => $this->resolveInvoiceServiceName($firstItem?->name, $firstItem?->item_type),
             'date' => optional($row->transacted_at)->format('Y-m-d'),
             'expiredDate' => optional($row->transacted_at?->copy()->addYear())->format('Y-m-d'),
             'total' => (float) $row->grand_total,
@@ -385,17 +478,106 @@ class CustomerPortalController extends Controller
     {
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         $firstItem = $row->items->first();
+        $dueAt = $row->transacted_at?->copy()->addDays(30);
+        $daysUntilDue = $dueAt
+            ? now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false)
+            : null;
+        $paymentSubmitted = $this->isPaymentSubmitted($row);
+        $canPay = !$paid && !$paymentSubmitted && $daysUntilDue !== null && $daysUntilDue <= 7;
+
+        if ($paid) {
+            $status = 'Paid';
+        } elseif ($paymentSubmitted) {
+            $status = 'Awaiting Approval';
+        } elseif ($daysUntilDue !== null && $daysUntilDue < 0) {
+            $status = 'Overdue';
+        } elseif ($daysUntilDue !== null && $daysUntilDue <= 7) {
+            $status = 'Payment Due';
+        } else {
+            $status = 'Pending Payment';
+        }
 
         return [
             'id' => $this->invoiceId($row),
             'transactionNo' => $row->transaction_no,
             'date' => optional($row->transacted_at)->format('Y-m-d'),
-            'due' => optional($row->transacted_at?->copy()->addDays(30))->format('Y-m-d'),
+            'due' => optional($dueAt)->format('Y-m-d'),
             'amount' => (float) $row->grand_total,
-            'status' => $paid ? 'Paid' : 'Pending Payment',
+            'status' => $status,
+            'canPay' => $canPay,
+            'daysUntilDue' => $daysUntilDue,
+            'serviceName' => $this->resolveInvoiceServiceName($firstItem?->name, $firstItem?->item_type),
+            'plan' => $firstItem?->name ?? $row->transaction_no,
             'subscription' => $firstItem?->name ?? $row->transaction_no,
-            'items' => $firstItem?->name ?? 'Service',
+            'items' => $this->resolveInvoiceServiceName($firstItem?->name, $firstItem?->item_type),
         ];
+    }
+
+    private function mapPaymentProof(CustomerPaymentProof $proof): array
+    {
+        return [
+            'id' => $proof->proof_no,
+            'recordId' => $proof->id,
+            'invoiceId' => $proof->invoice_id,
+            'fileName' => $proof->file_name,
+            'fileUrl' => $proof->file_path
+                ? url(Storage::disk('public')->url($proof->file_path))
+                : null,
+            'date' => optional($proof->created_at)->format('Y-m-d'),
+            'status' => $proof->status,
+            'notes' => $proof->notes,
+        ];
+    }
+
+    private function resolveInvoiceServiceName(?string $name, ?string $itemType): string
+    {
+        $haystack = strtolower(trim(($name ?? '') . ' ' . ($itemType ?? '')));
+
+        if (str_contains($haystack, 'domain')) {
+            return 'Secure Domain';
+        }
+        if (str_contains($haystack, 'dms') || str_contains($haystack, 'document')) {
+            return 'DMS';
+        }
+        if (str_contains($haystack, 'design') || str_contains($haystack, 'canvas') || str_contains($haystack, 'web')) {
+            return 'Custom Web Design';
+        }
+        if (str_contains($haystack, 'credit')) {
+            return 'Account Credit';
+        }
+        if (str_contains($haystack, 'hosting') || str_contains($haystack, 'cloud') || str_contains($haystack, 'server')) {
+            return 'Hosting';
+        }
+
+        return $name ?: 'Service';
+    }
+
+    private function generatePaymentProofNo(): string
+    {
+        $prefix = 'PRF-' . now()->format('ymd') . '-';
+        $latest = CustomerPaymentProof::query()
+            ->where('proof_no', 'like', $prefix . '%')
+            ->orderByDesc('proof_no')
+            ->value('proof_no');
+
+        $next = 1;
+        if ($latest && preg_match('/-(\d+)$/', $latest, $matches)) {
+            $next = ((int) $matches[1]) + 1;
+        }
+
+        return $prefix . str_pad((string) $next, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function isPaymentSubmitted(SalesTransaction $row): bool
+    {
+        $notes = trim((string) $row->notes);
+
+        if ($notes === '') {
+            return false;
+        }
+
+        return str_starts_with($notes, 'Invoice payment')
+            || str_starts_with($notes, 'Account credit top-up');
     }
 
     private function extractPaymentMethod(?string $notes): string
@@ -483,6 +665,21 @@ class CustomerPortalController extends Controller
         abort_if($paid, 422, 'This invoice is already paid.');
     }
 
+    private function assertInvoiceCanPay(SalesTransaction $transaction): void
+    {
+        if ($this->isPaymentSubmitted($transaction)) {
+            abort(422, 'Payment is already pending admin approval.');
+        }
+
+        $dueAt = $transaction->transacted_at?->copy()->addDays(30);
+        if (!$dueAt) {
+            abort(422, 'This invoice is not ready for payment yet.');
+        }
+
+        $daysUntilDue = now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false);
+        abort_if($daysUntilDue > 7, 422, 'Payment opens 7 days before the due date.');
+    }
+
     private function generateTransactionNo(): string
     {
         $prefix = 'ST-' . now()->format('Ymd') . '-';
@@ -502,6 +699,83 @@ class CustomerPortalController extends Controller
     private function invoiceId(SalesTransaction $row): string
     {
         return 'INV-' . $row->transaction_no;
+    }
+
+    private function buildBillingReminder(Collection $transactions): ?array
+    {
+        $pending = $transactions->filter(
+            fn ($row) => !in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true)
+        );
+
+        if ($pending->isEmpty()) {
+            return null;
+        }
+
+        $candidate = $pending
+            ->sortBy(fn (SalesTransaction $row) => optional($row->transacted_at?->copy()->addDays(30))->timestamp ?? PHP_INT_MAX)
+            ->first();
+
+        if (!$candidate) {
+            return null;
+        }
+
+        $dueAt = $candidate->transacted_at?->copy()->addDays(30);
+        if (!$dueAt) {
+            return null;
+        }
+
+        $daysUntilDue = now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false);
+
+        // New orders still have ~30 days to pay — don't show a renewal banner yet.
+        if ($daysUntilDue > 7) {
+            return null;
+        }
+
+        $isRenewal = $this->isRenewalReminder($candidate);
+        $dueDaysLabel = $daysUntilDue < 0
+            ? 'Overdue'
+            : 'Due in ' . max($daysUntilDue, 0) . ' Day' . ($daysUntilDue === 1 ? '' : 's');
+        $canPay = !$this->isPaymentSubmitted($candidate) && $daysUntilDue <= 7;
+
+        return [
+            'invoiceId' => $this->invoiceId($candidate),
+            'transactionNo' => $candidate->transaction_no,
+            'title' => $candidate->items->first()?->name ?? $candidate->transaction_no,
+            'dueDate' => $dueAt->format('F j, Y'),
+            'amount' => (float) $candidate->grand_total,
+            'kind' => $isRenewal ? 'renewal' : 'payment',
+            'headline' => $isRenewal
+                ? 'Renewal Reminder: Invoice ' . $dueDaysLabel
+                : ($daysUntilDue < 0 ? 'Payment Overdue' : 'Payment Due Soon'),
+            'buttonLabel' => $isRenewal ? 'Pay & Renew' : 'Pay Now',
+            'daysUntilDue' => $daysUntilDue,
+            'canPay' => $canPay,
+        ];
+    }
+
+    private function isRenewalReminder(SalesTransaction $transaction): bool
+    {
+        $linkedService = CustomerService::query()
+            ->where('customer_id', $transaction->customer_id)
+            ->where('sales_transaction_id', $transaction->id)
+            ->first();
+
+        if ($linkedService && in_array($linkedService->status, ['Active', 'Expired'], true)) {
+            return true;
+        }
+
+        $itemName = $transaction->items->first()?->name;
+        if (!$itemName) {
+            return false;
+        }
+
+        return CustomerService::query()
+            ->where('customer_id', $transaction->customer_id)
+            ->where('title', $itemName)
+            ->where('status', 'Active')
+            ->whereNotNull('renew_at')
+            ->where('renew_at', '<=', now()->addDays(7))
+            ->exists();
     }
 
     private function generateTicketNo(): string
