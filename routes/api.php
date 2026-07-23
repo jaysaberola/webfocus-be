@@ -34,6 +34,7 @@ use App\Http\Controllers\Api\PublicLegalController;
 use App\Http\Controllers\Api\PublicFreshchatController;
 use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
+use App\Http\Controllers\Api\CommerceAdminController;
 
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -61,6 +62,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/notifications/{notification}', [CustomerPortalController::class, 'deleteNotification']);
         Route::get('/tickets', [CustomerPortalController::class, 'tickets']);
         Route::post('/tickets', [CustomerPortalController::class, 'storeTicket']);
+    });
+
+    Route::prefix('commerce-admin')->group(function () {
+        Route::get('/dashboard', [CommerceAdminController::class, 'dashboard']);
+        Route::get('/payment-proofs', [CommerceAdminController::class, 'paymentProofs']);
+        Route::patch('/payment-proofs/{paymentProof}/verify', [CommerceAdminController::class, 'verifyPaymentProof']);
+        Route::patch('/payment-proofs/{paymentProof}/reject', [CommerceAdminController::class, 'rejectPaymentProof']);
+        Route::get('/tickets', [CommerceAdminController::class, 'tickets']);
+        Route::patch('/tickets/{ticket}', [CommerceAdminController::class, 'updateTicket']);
+        Route::get('/services', [CommerceAdminController::class, 'services']);
     });
 
     // dashboard
