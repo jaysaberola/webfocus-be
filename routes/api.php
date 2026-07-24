@@ -8,7 +8,6 @@ use App\Http\Controllers\Api\RoleController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\AlbumController;
 use App\Http\Controllers\Api\OptionController;
-use App\Http\Controllers\Api\AccountController;
 use App\Http\Controllers\Api\ArticleController;
 use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\CouponController;
@@ -28,13 +27,13 @@ use App\Http\Controllers\Api\LayoutPresetController;
 use App\Http\Controllers\Api\WebsiteSettingController;
 use App\Http\Controllers\Api\ArticleCategoryController;
 use App\Http\Controllers\Api\Page\PublicPageController;
-use App\Http\Controllers\Api\PublicDomainController;
 use App\Http\Controllers\Api\PublicHostingController;
 use App\Http\Controllers\Api\PublicLegalController;
 use App\Http\Controllers\Api\PublicFreshchatController;
 use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\CommerceAdminController;
+use App\Http\Controllers\Api\DomainLookupController;
 
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -269,7 +268,6 @@ Route::get('/public/products', [ProductController::class, 'index']);
 Route::get('/public-product-categories', [ProductCategoryController::class, 'index']);
 Route::get('/public/product-categories', [ProductCategoryController::class, 'index']);
 Route::get('/public/pages/{slug}', [PublicPageController::class, 'show']);
-Route::get('/public/domains/check', [PublicDomainController::class, 'check']);
 Route::get('/public/hosting/plans', [PublicHostingController::class, 'plans']);
 Route::get('/public/hosting/addons', [PublicHostingController::class, 'addons']);
 Route::get('/public/legal/privacy', [PublicLegalController::class, 'privacy']);
@@ -294,3 +292,7 @@ Route::get('/public-article-categories', [PublicPageController::class, 'public_a
 Route::get('/public-articles-archive', [PublicPageController::class, 'archive']);
 
 Route::post('/contact', [PublicPageController::class, 'send']);
+
+//DomainChecker
+Route::get('/public/domains/check',[DomainLookupController::class, 'check'])->middleware('throttle:30,1');
+Route::post('/domain-lookup', [DomainLookupController::class, 'search'])->name('domain.lookup.search');
