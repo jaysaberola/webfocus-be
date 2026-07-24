@@ -34,6 +34,7 @@ use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\CommerceAdminController;
 use App\Http\Controllers\Api\DomainLookupController;
+use App\Http\Controllers\Api\AccountController;
 
 
 Route::post('/login', [AuthController::class, 'login']);
