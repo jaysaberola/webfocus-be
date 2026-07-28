@@ -58,27 +58,35 @@ class CustomerPortalNotificationSync
     public function buildOverviewAlerts(Collection $services, Collection $transactions): array
     {
         $alerts = [];
+        $provisioning = $services->where('status', 'Provisioning');
+        $unpaid = $this->unpaidTransactions($transactions);
 
-        foreach ($services->where('status', 'Provisioning') as $service) {
+        if ($provisioning->isNotEmpty()) {
+            $count = $provisioning->count();
             $alerts[] = [
-                'id' => 'alert-provisioning-' . $service->id,
+                'id' => 'alert-provisioning-summary',
                 'tone' => 'provisioning',
-                'title' => 'Provisioning Alert: ' . $service->title,
-                'message' => $service->title . ' is currently provisioning. We\'ll notify you when it\'s active.',
+                'title' => $count === 1
+                    ? 'Provisioning Alert: ' . $provisioning->first()->title
+                    : 'Provisioning Alerts (' . $count . ')',
+                'message' => $count === 1
+                    ? $provisioning->first()->title . ' is currently provisioning. We\'ll notify you when it\'s active.'
+                    : 'You have ' . $count . ' services currently provisioning. We\'ll notify you when they\'re active.',
                 'actionLabel' => 'View Alerts',
                 'actionHref' => '/public/dashboard?tab=notification',
                 'icon' => 'bell',
             ];
         }
 
-        foreach ($this->unpaidTransactions($transactions) as $transaction) {
-            $itemNames = $transaction->items->pluck('name')->filter()->take(3)->implode(', ');
+        if ($unpaid->isNotEmpty()) {
+            $count = $unpaid->count();
             $alerts[] = [
-                'id' => 'alert-payment-' . $transaction->id,
+                'id' => 'alert-payment-summary',
                 'tone' => 'payment',
                 'title' => 'Payment pending admin approval',
-                'message' => 'We received your order for ' . ($itemNames ?: $transaction->transaction_no)
-                    . '. Provisioning begins only after payment is complete.',
+                'message' => $count === 1
+                    ? $this->paymentAlertMessage($unpaid->first())
+                    : 'You have ' . $count . ' orders pending payment approval. Provisioning begins only after payment is complete.',
                 'actionLabel' => 'View Orders',
                 'actionHref' => '/public/dashboard?tab=orders',
                 'icon' => 'card',
@@ -86,6 +94,14 @@ class CustomerPortalNotificationSync
         }
 
         return $alerts;
+    }
+
+    private function paymentAlertMessage(SalesTransaction $transaction): string
+    {
+        $itemNames = $transaction->items->pluck('name')->filter()->take(3)->implode(', ');
+
+        return 'We received your order for ' . ($itemNames ?: $transaction->transaction_no)
+            . '. Provisioning begins only after payment is complete.';
     }
 
     public function notifyServiceActivated(CustomerService $service): void
