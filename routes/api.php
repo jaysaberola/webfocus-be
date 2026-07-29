@@ -78,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
 
     // pages
+    Route::get('/pages-switcher', [PageController::class, 'switcherList']);
     Route::get('/pages', [PageController::class, 'index']);
     Route::post('/pages', [PageController::class, 'store']);
     Route::get('/pages/{id}', [PageController::class, 'show']);
@@ -275,6 +276,7 @@ Route::get('/public/legal/privacy', [PublicLegalController::class, 'privacy']);
 Route::get('/public/freshchat', [PublicFreshchatController::class, 'show']);
 Route::get('/public/menus/active', [PublicPageController::class, 'active']);
 Route::get('/public/footer', [PublicPageController::class, 'footer']);
+Route::get('/public/branding', [WebsiteSettingController::class, 'publicBranding']);
 
 // Public search routes
 // Back-compat aliases for frontend helpers expecting /search and /public/search
