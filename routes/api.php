@@ -36,9 +36,6 @@ use App\Http\Controllers\Api\CommerceAdminController;
 use App\Http\Controllers\Api\DomainLookupController;
 use App\Http\Controllers\Api\PaynamicsPaymentController;
 use App\Http\Controllers\Api\AccountController;
-use App\Http\Controllers\Api\AccountController;
-
-
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/customer-login', [AuthController::class, 'customerLogin']);
@@ -87,8 +84,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/customers', [CustomerController::class, 'store']);
 
     Route::middleware('cms.portal')->group(function () {
-    // dashboard
-    Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
+        // dashboard
+        Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
 
     // pages
     Route::get('/pages-switcher', [PageController::class, 'switcherList']);
@@ -265,10 +262,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('zip',               [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'zip']);
         Route::post('unzip',             [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'unzip']);
     });
-
-    });
-
-});
+    }); // cms.portal
+}); // auth:sanctum
 
 //public
 Route::get('/public-products', [ProductController::class, 'index']);
