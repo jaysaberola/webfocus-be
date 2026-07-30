@@ -17,7 +17,9 @@ class AccountController extends Controller
      */
     public function me(Request $request)
     {
-        $user = $request->user();
+        $user = $request->user()->load('roles');
+
+        $role = $user->roles->first();
 
         return response()->json(array_merge(
             $user->only([
@@ -38,6 +40,8 @@ class AccountController extends Controller
             [
                 'role' => $user->getRoleNames()->first(),
                 'roles' => $user->getRoleNames()->values()->all(),
+                'role_description' => $role?->description,
+                'permissions' => $user->getAllPermissions()->pluck('name')->values()->all(),
             ]
         ));
     }

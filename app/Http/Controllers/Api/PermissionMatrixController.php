@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Support\ManageableRoles;
 use Illuminate\Http\Request;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\Models\Permission;
@@ -11,7 +12,18 @@ class PermissionMatrixController extends Controller
 {
     public function index()
     {
-        $roles = Role::select('id', 'name')->get();
+        $roleModels = ManageableRoles::query()
+            ->with('permissions:id')
+            ->select('id', 'name', 'description')
+            ->orderBy('name')
+            ->get();
+
+        $roles = $roleModels->map(fn ($role) => [
+            'id' => $role->id,
+            'name' => $role->name,
+            'description' => $role->description,
+            'label' => $role->description ?: ucwords(str_replace('_', ' ', $role->name)),
+        ]);
 
         $permissions = Permission::all()->map(function ($perm) {
             [$module, $action] = explode('.', $perm->name, 2);
@@ -26,7 +38,7 @@ class PermissionMatrixController extends Controller
 
         $assigned = [];
 
-        foreach ($roles as $role) {
+        foreach ($roleModels as $role) {
             $assigned[$role->id] = $role->permissions->pluck('id')->toArray();
         }
 
@@ -40,7 +52,7 @@ class PermissionMatrixController extends Controller
     public function sync(Request $request)
     {
         foreach ($request->assigned as $roleId => $permissions) {
-            $role = Role::findOrFail($roleId);
+            $role = ManageableRoles::query()->findOrFail($roleId);
             $role->syncPermissions($permissions);
         }
 

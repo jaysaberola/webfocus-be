@@ -4,70 +4,86 @@ namespace Database\Seeders;
 
 use App\Models\User;
 use Illuminate\Database\Seeder;
-use Spatie\Permission\Models\Role;
 use Illuminate\Support\Facades\Hash;
+use Spatie\Permission\Models\Role;
 
 class UserSeeder extends Seeder
 {
     public function run(): void
     {
-        /**
-         * Ensure roles exist (already seeded, but safe check)
-         */
-        $adminRole  = Role::where('name', 'admin')->where('guard_name', 'sanctum')->firstOrFail();
+        $adminRole = Role::where('name', 'admin')->where('guard_name', 'sanctum')->firstOrFail();
         $editorRole = Role::where('name', 'editor')->where('guard_name', 'sanctum')->firstOrFail();
-        $userRole   = Role::where('name', 'user')->where('guard_name', 'sanctum')->firstOrFail();
+        $financeAdminRole = Role::where('name', 'finance_admin')->where('guard_name', 'sanctum')->firstOrFail();
+        $salesAdminRole = Role::where('name', 'sales_admin')->where('guard_name', 'sanctum')->firstOrFail();
+        $technicalSupportRole = Role::where('name', 'technical_support')->where('guard_name', 'sanctum')->firstOrFail();
+        $customerCareRole = Role::where('name', 'customer_care')->where('guard_name', 'sanctum')->firstOrFail();
 
-        /**
-         * --------------------
-         * ADMIN USER
-         * --------------------
-         */
+        $defaultPassword = Hash::make('password');
+
         $admin = User::firstOrCreate(
             ['email' => 'admin@wsi.com'],
             [
-                'fname' => 'Admin',
-                'lname' => 'User',
-                'password' => Hash::make('password'),
+                'fname' => 'Super',
+                'lname' => 'Admin',
+                'password' => $defaultPassword,
                 'is_active' => true,
             ]
         );
-
-        // ⭐ Assign ADMIN role (already has ALL permissions via RoleSeeder)
         $admin->syncRoles([$adminRole]);
 
-        /**
-         * --------------------
-         * JOHN DOE (EDITOR)
-         * --------------------
-         */
         $john = User::firstOrCreate(
             ['email' => 'john@wsi.com'],
             [
                 'fname' => 'John',
                 'lname' => 'Doe',
-                'password' => Hash::make('password'),
+                'password' => $defaultPassword,
                 'is_active' => true,
             ]
         );
-
         $john->syncRoles([$editorRole]);
 
-        /**
-         * --------------------
-         * JANE DOE (USER)
-         * --------------------
-         */
-        $jane = User::firstOrCreate(
-            ['email' => 'jane@wsi.com'],
+        $financeAdmin = User::firstOrCreate(
+            ['email' => 'finance@webfocus.ph'],
             [
-                'fname' => 'Jane',
-                'lname' => 'Doe',
-                'password' => Hash::make('password'),
+                'fname' => 'Finance',
+                'lname' => 'Admin',
+                'password' => $defaultPassword,
                 'is_active' => true,
             ]
         );
+        $financeAdmin->syncRoles([$financeAdminRole]);
 
-        $jane->syncRoles([$userRole]);
+        $salesAdmin = User::firstOrCreate(
+            ['email' => 'sales@webfocus.ph'],
+            [
+                'fname' => 'Sales',
+                'lname' => 'Admin',
+                'password' => $defaultPassword,
+                'is_active' => true,
+            ]
+        );
+        $salesAdmin->syncRoles([$salesAdminRole]);
+
+        $technicalSupport = User::firstOrCreate(
+            ['email' => 'support@webfocus.ph'],
+            [
+                'fname' => 'Technical',
+                'lname' => 'Support',
+                'password' => $defaultPassword,
+                'is_active' => true,
+            ]
+        );
+        $technicalSupport->syncRoles([$technicalSupportRole]);
+
+        $customerCare = User::firstOrCreate(
+            ['email' => 'care@webfocus.ph'],
+            [
+                'fname' => 'Customer',
+                'lname' => 'Care',
+                'password' => $defaultPassword,
+                'is_active' => true,
+            ]
+        );
+        $customerCare->syncRoles([$customerCareRole]);
     }
 }

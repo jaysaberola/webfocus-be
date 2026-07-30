@@ -74,6 +74,16 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/services', [CommerceAdminController::class, 'services']);
     });
 
+    // Commerce data shared by CMS modules and Commerce Control Center
+    Route::apiResource('sales-transactions', SalesTransactionController::class)
+        ->parameters(['sales-transactions' => 'salesTransaction']);
+    Route::get('/customers', [CustomerController::class, 'index']);
+    Route::get('/customers/{customer}', [CustomerController::class, 'show']);
+    Route::put('/customers/{customer}', [CustomerController::class, 'update']);
+    Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
+    Route::post('/customers', [CustomerController::class, 'store']);
+
+    Route::middleware('cms.portal')->group(function () {
     // dashboard
     Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
 
@@ -157,8 +167,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/product-categories/{id}/restore', [ProductCategoryController::class, 'restoreById']);
 
     Route::apiResource('coupons', CouponController::class);
-    Route::apiResource('sales-transactions', SalesTransactionController::class)
-        ->parameters(['sales-transactions' => 'salesTransaction']);
     Route::apiResource('job-orders', JobOrderController::class)
         ->parameters(['job-orders' => 'jobOrder']);
 
@@ -192,13 +200,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/services/{service}', [ServiceController::class, 'handlePostAction']);
     Route::delete('/services/{service}', [ServiceController::class, 'destroy']);
     Route::post('/services/{id}/restore', [ServiceController::class, 'restoreById']);
-
-    // customers
-    Route::get('/customers', [CustomerController::class, 'index']);
-    Route::post('/customers', [CustomerController::class, 'store']);
-    Route::get('/customers/{customer}', [CustomerController::class, 'show']);
-    Route::put('/customers/{customer}', [CustomerController::class, 'update']);
-    Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
 
     // users
     Route::post('/users', [UserController::class, 'store']);
@@ -260,6 +261,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('url',                [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'url']);
         Route::post('zip',               [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'zip']);
         Route::post('unzip',             [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'unzip']);
+    });
+
     });
 
 });

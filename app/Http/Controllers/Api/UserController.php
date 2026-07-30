@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Support\ManageableRoles;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -45,7 +46,7 @@ class UserController extends Controller
 
     public function fetch_roles(){
         return response()->json([
-            'data' => Role::where('guard_name', 'sanctum')
+            'data' => ManageableRoles::query()
                 ->orderBy('name')
                 ->get(['id', 'name']),
         ]);
