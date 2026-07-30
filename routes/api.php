@@ -34,6 +34,11 @@ use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\CommerceAdminController;
 use App\Http\Controllers\Api\DomainLookupController;
+<<<<<<< Updated upstream
+=======
+use App\Http\Controllers\Api\PaynamicsPaymentController;
+use App\Http\Controllers\Api\AccountController;
+>>>>>>> Stashed changes
 
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -296,3 +301,34 @@ Route::post('/contact', [PublicPageController::class, 'send']);
 //DomainChecker
 Route::get('/public/domains/check',[DomainLookupController::class, 'check'])->middleware('throttle:30,1');
 Route::post('/domain-lookup', [DomainLookupController::class, 'search'])->name('domain.lookup.search');
+
+/*
+ * Add the authenticated checkout route beside your other customer routes.
+ */
+Route::middleware('auth:sanctum')->group(function () {
+    Route::post(
+        '/public/paynamics/checkout',
+        [SalesTransactionController::class, 'checkoutWithPaynamics']
+    )->name('paynamics.checkout');
+});
+
+/*
+ * These Paynamics callbacks must remain public. The notification is protected
+ * by SHA-512 response-signature validation rather than user authentication.
+ */
+Route::post(
+    '/paynamics/notification',
+    [PaynamicsPaymentController::class, 'notification']
+)->name('paynamics.notification');
+
+Route::match(
+    ['get', 'post'],
+    '/paynamics/return',
+    [PaynamicsPaymentController::class, 'returnFromGateway']
+)->name('paynamics.return');
+
+Route::match(
+    ['get', 'post'],
+    '/paynamics/cancel',
+    [PaynamicsPaymentController::class, 'cancel']
+)->name('paynamics.cancel');
