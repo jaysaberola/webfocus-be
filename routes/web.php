@@ -22,6 +22,8 @@ Route::get('/admin/file-manager-ui', function () {
     return view('admin.file-manager');
 });
 
+
+
 Route::group([
     'prefix' => 'file-manager',
 ], function () {

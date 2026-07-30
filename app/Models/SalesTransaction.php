@@ -51,4 +51,9 @@ class SalesTransaction extends Model implements AuditableContract
     {
         return $this->hasMany(SalesTransactionItem::class);
     }
+
+    public function paynamicsPaymentReferences()
+    {
+        return $this->hasMany(PaynamicsPaymentReference::class);
+    }
 }

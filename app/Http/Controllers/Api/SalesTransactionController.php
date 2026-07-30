@@ -6,10 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\SalesTransaction;
 use App\Models\User;
 use App\Services\CustomerPortalProvisioner;
-use App\Services\CustomerPortalNotificationSync;
-use Illuminate\Support\Facades\DB;
+use App\Services\PaynamicsService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Throwable;
 
 class SalesTransactionController extends Controller
 {
@@ -34,10 +35,18 @@ class SalesTransactionController extends Controller
             ->when($request->customer_id, fn($q) => $q->where('customer_id', $request->customer_id))
             ->when($request->payment_status, fn($q) => $q->where('payment_status', $request->payment_status))
             ->when($request->order_status, fn($q) => $q->where('order_status', $request->order_status))
-            ->when($request->filled('transacted_at_from'), fn($q) => $q->whereDate('transacted_at', '>=', $request->input('transacted_at_from')))
-            ->when($request->filled('transacted_at_to'), fn($q) => $q->whereDate('transacted_at', '<=', $request->input('transacted_at_to')));
+            ->when(
+                $request->filled('transacted_at_from'),
+                fn($q) => $q->whereDate('transacted_at', '>=', $request->input('transacted_at_from'))
+            )
+            ->when(
+                $request->filled('transacted_at_to'),
+                fn($q) => $q->whereDate('transacted_at', '<=', $request->input('transacted_at_to'))
+            );
 
-        return response()->json($query->latest('transacted_at')->latest('updated_at')->paginate($perPage));
+        return response()->json(
+            $query->latest('transacted_at')->latest('updated_at')->paginate($perPage)
+        );
     }
 
     public function store(Request $request)
@@ -46,7 +55,8 @@ class SalesTransactionController extends Controller
         $items = $validated['items'] ?? [];
         unset($validated['items']);
         $validated = $this->normalizeCustomer($validated);
-        $validated['transaction_no'] = ($validated['transaction_no'] ?? null) ?: $this->generateTransactionNo();
+        $validated['transaction_no'] =
+            ($validated['transaction_no'] ?? null) ?: $this->generateTransactionNo();
         $validated['subtotal'] = $this->calculateSubtotal($validated, $items);
         $validated['grand_total'] = $this->calculateGrandTotal($validated);
         $validated['user_id'] = $request->user()?->id;
@@ -59,29 +69,116 @@ class SalesTransactionController extends Controller
         });
 
         if ($transaction->customer_id) {
-            app(CustomerPortalProvisioner::class)->provisionFromTransaction($transaction->fresh(['items']));
+            app(CustomerPortalProvisioner::class)
+                ->provisionFromTransaction($transaction->fresh(['items']));
         }
 
         return response()->json([
             'message' => 'Sales transaction created successfully',
-            'data' => $transaction->load(['customer:id,fname,lname,email', 'items']),
+            'data' => $transaction->load([
+                'customer:id,fname,lname,email',
+                'items',
+            ]),
+        ], 201);
+    }
+
+    /**
+     * Creates a pending order and returns a Paynamics-hosted payment URL.
+     *
+     * No card, bank, e-wallet, or payment instrument data is collected or
+     * stored by this application.
+     */
+    public function checkoutWithPaynamics(
+        Request $request,
+        PaynamicsService $paynamics
+    ) {
+        /** @var User|null $customer */
+        $customer = $request->user();
+        abort_unless($customer, 401);
+
+        /*
+         * Validate the profile before creating an order so missing mandatory
+         * Paynamics billing fields do not leave an unusable pending order.
+         */
+        $paynamics->assertCustomerProfile($customer);
+
+        $request->validate([
+            'items' => ['required', 'array', 'min:1'],
+        ]);
+
+        $validated = $this->validatedPayload($request);
+        $items = $validated['items'] ?? [];
+        unset($validated['items']);
+
+        $validated['customer_id'] = $customer->id;
+        $validated['customer_name'] = trim(
+            "{$customer->fname} {$customer->lname}"
+        );
+        $validated['customer_email'] = $customer->email;
+        $validated['transaction_no'] =
+            ($validated['transaction_no'] ?? null) ?: $this->generateTransactionNo();
+        $validated['subtotal'] = $this->calculateSubtotal($validated, $items);
+        $validated['grand_total'] = $this->calculateGrandTotal($validated);
+        $validated['payment_status'] = 'pending';
+        $validated['order_status'] = 'pending';
+        $validated['user_id'] = $customer->id;
+
+        $transaction = DB::transaction(function () use ($validated, $items) {
+            $transaction = SalesTransaction::create($validated);
+            $this->syncItems($transaction, $items);
+
+            return $transaction->fresh(['items']);
+        });
+
+        try {
+            $gateway = $paynamics->initiate(
+                $transaction,
+                $customer,
+                $request->ip(),
+                $request->userAgent()
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'data' => [
+                    'transaction_id' => $transaction->id,
+                    'transaction_no' => $transaction->transaction_no,
+                ],
+            ], 502);
+        }
+
+        return response()->json([
+            'message' => 'Redirecting to the Paynamics payment portal.',
+            'data' => $transaction->load([
+                'customer:id,fname,lname,email',
+                'items',
+            ]),
+            'paynamics' => $gateway,
         ], 201);
     }
 
     public function show(SalesTransaction $salesTransaction)
     {
         return response()->json([
-            'data' => $salesTransaction->load(['customer:id,fname,lname,email', 'items']),
+            'data' => $salesTransaction->load([
+                'customer:id,fname,lname,email',
+                'items',
+            ]),
         ]);
     }
 
-    public function update(Request $request, SalesTransaction $salesTransaction)
-    {
+    public function update(
+        Request $request,
+        SalesTransaction $salesTransaction
+    ) {
         $validated = $this->validatedPayload($request, $salesTransaction->id);
         $items = $validated['items'] ?? null;
         unset($validated['items']);
         $validated = $this->normalizeCustomer($validated);
-        $validated['transaction_no'] = ($validated['transaction_no'] ?? null) ?: $salesTransaction->transaction_no;
+        $validated['transaction_no'] =
+            ($validated['transaction_no'] ?? null) ?: $salesTransaction->transaction_no;
         $validated['subtotal'] = $this->calculateSubtotal($validated, $items);
         $validated['grand_total'] = $this->calculateGrandTotal($validated);
 
@@ -93,12 +190,18 @@ class SalesTransactionController extends Controller
         });
 
         if ($salesTransaction->customer_id) {
-            app(CustomerPortalProvisioner::class)->refreshServicesFromTransaction($salesTransaction->fresh(['items']));
+            app(CustomerPortalProvisioner::class)
+                ->refreshServicesFromTransaction(
+                    $salesTransaction->fresh(['items'])
+                );
         }
 
         return response()->json([
             'message' => 'Sales transaction updated successfully',
-            'data' => $salesTransaction->fresh()->load(['customer:id,fname,lname,email', 'items']),
+            'data' => $salesTransaction->fresh()->load([
+                'customer:id,fname,lname,email',
+                'items',
+            ]),
         ]);
     }
 
@@ -106,17 +209,22 @@ class SalesTransactionController extends Controller
     {
         $salesTransaction->delete();
 
-        return response()->json(['message' => 'Sales transaction deleted successfully']);
+        return response()->json([
+            'message' => 'Sales transaction deleted successfully',
+        ]);
     }
 
-    private function validatedPayload(Request $request, ?int $ignoreId = null): array
-    {
+    private function validatedPayload(
+        Request $request,
+        ?int $ignoreId = null
+    ): array {
         return $request->validate([
             'transaction_no' => [
                 'nullable',
                 'string',
                 'max:100',
-                Rule::unique('sales_transactions', 'transaction_no')->ignore($ignoreId),
+                Rule::unique('sales_transactions', 'transaction_no')
+                    ->ignore($ignoreId),
             ],
             'customer_id' => ['nullable', 'integer', 'exists:users,id'],
             'customer_name' => ['nullable', 'string', 'max:255'],
@@ -130,9 +238,21 @@ class SalesTransactionController extends Controller
             'notes' => ['nullable', 'string'],
             'transacted_at' => ['nullable', 'date'],
             'items' => ['nullable', 'array'],
-            'items.*.product_id' => ['nullable', 'integer', 'exists:products,id'],
-            'items.*.name' => ['required_with:items', 'string', 'max:255'],
-            'items.*.item_type' => ['nullable', 'string', 'max:50'],
+            'items.*.product_id' => [
+                'nullable',
+                'integer',
+                'exists:products,id',
+            ],
+            'items.*.name' => [
+                'required_with:items',
+                'string',
+                'max:255',
+            ],
+            'items.*.item_type' => [
+                'nullable',
+                'string',
+                'max:50',
+            ],
             'items.*.price' => ['nullable', 'numeric', 'min:0'],
             'items.*.quantity' => ['nullable', 'numeric', 'min:0'],
             'items.*.total_price' => ['nullable', 'numeric', 'min:0'],
@@ -144,8 +264,10 @@ class SalesTransactionController extends Controller
         if (!empty($payload['customer_id'])) {
             $customer = User::find($payload['customer_id']);
             if ($customer) {
-                $payload['customer_name'] = ($payload['customer_name'] ?? null) ?: $customer->full_name;
-                $payload['customer_email'] = ($payload['customer_email'] ?? null) ?: $customer->email;
+                $payload['customer_name'] =
+                    ($payload['customer_name'] ?? null) ?: $customer->full_name;
+                $payload['customer_email'] =
+                    ($payload['customer_email'] ?? null) ?: $customer->email;
             }
         }
 
@@ -154,14 +276,19 @@ class SalesTransactionController extends Controller
 
     private function calculateGrandTotal(array $payload): float
     {
-        return max(0, (float) ($payload['subtotal'] ?? 0)
-            - (float) ($payload['discount_total'] ?? 0)
-            + (float) ($payload['tax_total'] ?? 0)
-            + (float) ($payload['shipping_total'] ?? 0));
+        return max(
+            0,
+            (float) ($payload['subtotal'] ?? 0)
+                - (float) ($payload['discount_total'] ?? 0)
+                + (float) ($payload['tax_total'] ?? 0)
+                + (float) ($payload['shipping_total'] ?? 0)
+        );
     }
 
-    private function calculateSubtotal(array $payload, ?array $items): float
-    {
+    private function calculateSubtotal(
+        array $payload,
+        ?array $items
+    ): float {
         if (!is_array($items) || count($items) === 0) {
             return (float) ($payload['subtotal'] ?? 0);
         }
@@ -171,8 +298,10 @@ class SalesTransactionController extends Controller
         });
     }
 
-    private function syncItems(SalesTransaction $transaction, array $items): void
-    {
+    private function syncItems(
+        SalesTransaction $transaction,
+        array $items
+    ): void {
         $transaction->items()->delete();
 
         foreach ($items as $item) {
@@ -192,11 +321,15 @@ class SalesTransactionController extends Controller
 
     private function calculateItemTotal(array $item): float
     {
-        if (array_key_exists('total_price', $item) && $item['total_price'] !== null) {
+        if (
+            array_key_exists('total_price', $item) &&
+            $item['total_price'] !== null
+        ) {
             return (float) $item['total_price'];
         }
 
-        return (float) ($item['price'] ?? 0) * (float) ($item['quantity'] ?? 1);
+        return (float) ($item['price'] ?? 0)
+            * (float) ($item['quantity'] ?? 1);
     }
 
     private function generateTransactionNo(): string
