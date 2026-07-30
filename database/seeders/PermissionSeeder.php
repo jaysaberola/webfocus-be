@@ -14,74 +14,103 @@ class PermissionSeeder extends Seeder
 
         $permissions = [
 
-            // 🔹 PAGES
+            // CMS — Dashboard
+            'dashboard.view',
+
+            // CMS — Pages
             'pages.view',
             'pages.create',
             'pages.edit',
             'pages.delete',
             'pages.change_status',
 
-            // 🔹 ALBUMS
+            // CMS — Banners / Albums
             'albums.view',
             'albums.create',
             'albums.edit',
             'albums.delete',
 
-            // 🔹 FILE MANAGER
+            // CMS — File Manager
             'file_manager.manage',
 
-            // 🔹 MENUS
+            // CMS — Menus
             'menus.view',
             'menus.create',
             'menus.edit',
             'menus.delete',
 
-            // 🔹 NEWS
+            // CMS — News
             'news.view',
             'news.create',
             'news.edit',
             'news.delete',
             'news.change_status',
 
-            // 🔹 NEWS CATEGORIES
+            // CMS — News Categories
             'news_categories.view',
             'news_categories.create',
             'news_categories.edit',
             'news_categories.delete',
 
-            // 🔹 WEBSITE SETTINGS
+            // CMS — Website Settings
             'website_settings.edit',
 
-            // 🔹 AUDIT LOGS
+            // CMS — Audit Logs
             'audit_logs.view',
 
-            // 🔹 USERS
+            // CMS — Account Management (users, roles, access rights)
             'users.view',
             'users.create',
             'users.edit',
             'users.change_status',
+            'roles.view',
+            'roles.manage',
+            'access_rights.manage',
 
-            // 🔹 CUSTOMERS
+            // Commerce — Dashboard
+            'commerce_dashboard.view',
+
+            // Commerce — Clients
             'customers.manage',
 
-            // 🔹 SALES TRANSACTIONS
+            // Commerce — Transactions
             'sales_transactions.view',
             'sales_transactions.manage',
 
-            // 🔹 PRODUCTS
-            'products.manage',
+            // Commerce — Approvals
+            'commerce_approvals.view',
+            'commerce_approvals.manage',
 
-            // 🔹 INVENTORY
+            // Commerce — Managed Services
+            'commerce_managed.view',
+            'commerce_managed.manage',
+
+            // Commerce — Contracts
+            'commerce_contracts.view',
+            'commerce_contracts.manage',
+
+            // Commerce — Catalog
+            'commerce_catalog.view',
+            'commerce_catalog.manage',
+            'products.manage',
             'inventory.view',
             'inventory.manage',
-
-            // 🔹 COUPONS
             'coupons.manage',
 
-            // 🔹 REPORTS
+            // Commerce — Notifications
+            'commerce_notifications.view',
+            'commerce_notifications.manage',
+
+            // Commerce — Helpdesk
+            'commerce_helpdesk.view',
+            'commerce_helpdesk.create',
+            'commerce_helpdesk.update',
+            'commerce_helpdesk.delete',
+
+            // Commerce — Reports
             'reports.view',
 
-            // 🔹 ADS / MODALS
+            // CMS — Ads / Modals
             'banner_ads.manage',
             'page_modals.manage',
         ];
@@ -89,7 +118,7 @@ class PermissionSeeder extends Seeder
         foreach ($permissions as $permission) {
             Permission::firstOrCreate([
                 'name' => $permission,
-                'guard_name' => 'sanctum', // IMPORTANT for Next.js
+                'guard_name' => 'sanctum',
             ]);
         }
     }

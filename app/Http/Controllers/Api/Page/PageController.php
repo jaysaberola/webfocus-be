@@ -250,6 +250,24 @@ class PageController extends Controller
         ]);
     }
 
+    public function switcherList()
+    {
+        $pages = Page::query()
+            ->select('id', 'name', 'label', 'slug', 'status')
+            ->orderBy('name')
+            ->get()
+            ->map(fn (Page $page) => [
+                'id' => $page->id,
+                'title' => $page->name,
+                'label' => $page->label ?? '',
+                'slug' => $page->slug,
+                'visibility' => ucfirst((string) $page->status),
+            ])
+            ->values();
+
+        return response()->json(['data' => $pages]);
+    }
+
     public function destroy(int $id)
     {
         $page = Page::findOrFail($id);

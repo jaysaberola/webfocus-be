@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Role;
+use App\Support\ManageableRoles;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -13,7 +14,8 @@ class RoleController extends Controller
     {
         $search = $request->get('search');
 
-        $roles = Role::when($search, function ($q) use ($search) {
+        $roles = ManageableRoles::query()
+            ->when($search, function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
                   ->orWhere('description', 'like', "%{$search}%");
             })

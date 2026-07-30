@@ -41,6 +41,23 @@ class WebsiteSettingController extends Controller
         ]);
     }
 
+    public function publicBranding()
+    {
+        $setting = Setting::query()->select([
+            'website_name',
+            'company_name',
+            'company_logo',
+            'website_favicon',
+        ])->first();
+
+        return response()->json([
+            'website_name' => $setting?->website_name,
+            'company_name' => $setting?->company_name,
+            'company_logo' => $setting?->company_logo,
+            'website_favicon' => $setting?->website_favicon,
+        ]);
+    }
+
     /* =========================
        WEBSITE TAB
     ========================= */

@@ -34,11 +34,10 @@ use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\CommerceAdminController;
 use App\Http\Controllers\Api\DomainLookupController;
-<<<<<<< Updated upstream
-=======
 use App\Http\Controllers\Api\PaynamicsPaymentController;
 use App\Http\Controllers\Api\AccountController;
->>>>>>> Stashed changes
+use App\Http\Controllers\Api\AccountController;
+
 
 
 Route::post('/login', [AuthController::class, 'login']);
@@ -78,10 +77,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/services', [CommerceAdminController::class, 'services']);
     });
 
+    // Commerce data shared by CMS modules and Commerce Control Center
+    Route::apiResource('sales-transactions', SalesTransactionController::class)
+        ->parameters(['sales-transactions' => 'salesTransaction']);
+    Route::get('/customers', [CustomerController::class, 'index']);
+    Route::get('/customers/{customer}', [CustomerController::class, 'show']);
+    Route::put('/customers/{customer}', [CustomerController::class, 'update']);
+    Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
+    Route::post('/customers', [CustomerController::class, 'store']);
+
+    Route::middleware('cms.portal')->group(function () {
     // dashboard
     Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
 
     // pages
+    Route::get('/pages-switcher', [PageController::class, 'switcherList']);
     Route::get('/pages', [PageController::class, 'index']);
     Route::post('/pages', [PageController::class, 'store']);
     Route::get('/pages/{id}', [PageController::class, 'show']);
@@ -160,8 +170,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/product-categories/{id}/restore', [ProductCategoryController::class, 'restoreById']);
 
     Route::apiResource('coupons', CouponController::class);
-    Route::apiResource('sales-transactions', SalesTransactionController::class)
-        ->parameters(['sales-transactions' => 'salesTransaction']);
     Route::apiResource('job-orders', JobOrderController::class)
         ->parameters(['job-orders' => 'jobOrder']);
 
@@ -195,13 +203,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/services/{service}', [ServiceController::class, 'handlePostAction']);
     Route::delete('/services/{service}', [ServiceController::class, 'destroy']);
     Route::post('/services/{id}/restore', [ServiceController::class, 'restoreById']);
-
-    // customers
-    Route::get('/customers', [CustomerController::class, 'index']);
-    Route::post('/customers', [CustomerController::class, 'store']);
-    Route::get('/customers/{customer}', [CustomerController::class, 'show']);
-    Route::put('/customers/{customer}', [CustomerController::class, 'update']);
-    Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
 
     // users
     Route::post('/users', [UserController::class, 'store']);
@@ -265,6 +266,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('unzip',             [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'unzip']);
     });
 
+    });
+
 });
 
 //public
@@ -279,6 +282,7 @@ Route::get('/public/legal/privacy', [PublicLegalController::class, 'privacy']);
 Route::get('/public/freshchat', [PublicFreshchatController::class, 'show']);
 Route::get('/public/menus/active', [PublicPageController::class, 'active']);
 Route::get('/public/footer', [PublicPageController::class, 'footer']);
+Route::get('/public/branding', [WebsiteSettingController::class, 'publicBranding']);
 
 // Public search routes
 // Back-compat aliases for frontend helpers expecting /search and /public/search

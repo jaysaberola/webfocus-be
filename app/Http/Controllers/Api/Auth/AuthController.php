@@ -29,6 +29,7 @@ class AuthController extends Controller
         }
 
         $user = auth()->user();
+        $user->load('roles');
 
         if ($user->hasRole(self::CUSTOMER_ROLE)) {
             Auth::logout();

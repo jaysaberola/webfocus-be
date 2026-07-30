@@ -16,6 +16,10 @@ class LoginResource extends JsonResource
             'lname' => $this->lname,
             'email' => $this->email,
             'token' => $this->token,
+            'role' => $this->getRoleNames()->first(),
+            'roles' => $this->getRoleNames()->values()->all(),
+            'role_description' => $this->roles->first()?->description,
+            'permissions' => $this->getAllPermissions()->pluck('name')->values()->all(),
         ];
     }
 }
