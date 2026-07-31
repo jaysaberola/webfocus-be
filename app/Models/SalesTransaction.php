@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\TransactionLabelResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use OwenIt\Auditing\Auditable;
@@ -36,6 +37,21 @@ class SalesTransaction extends Model implements AuditableContract
         'grand_total' => 'decimal:2',
         'transacted_at' => 'datetime',
     ];
+
+    protected $appends = [
+        'issued_date',
+        'due_date',
+    ];
+
+    public function getIssuedDateAttribute(): ?string
+    {
+        return TransactionLabelResolver::issuedDateFrom($this->transacted_at);
+    }
+
+    public function getDueDateAttribute(): ?string
+    {
+        return TransactionLabelResolver::dueDateFrom($this->transacted_at);
+    }
 
     public function customer()
     {

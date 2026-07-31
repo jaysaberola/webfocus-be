@@ -332,7 +332,7 @@ class CommerceAdminController extends Controller
             'status' => $proof->status,
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
-            'issuedDate' => optional($transactedAt)->format('Y-m-d'),
+            'issuedDate' => TransactionLabelResolver::issuedDateFrom($transactedAt),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($transactedAt),
             'amount' => (float) ($transaction?->grand_total ?? 0),
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($items),

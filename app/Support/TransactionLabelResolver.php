@@ -112,6 +112,15 @@ class TransactionLabelResolver
         return $label !== '' ? $label : $fallback;
     }
 
+    public static function issuedDateFrom(?\DateTimeInterface $transactedAt): ?string
+    {
+        if (!$transactedAt) {
+            return null;
+        }
+
+        return \Carbon\Carbon::parse($transactedAt)->format('Y-m-d');
+    }
+
     public static function dueDateFrom(?\DateTimeInterface $transactedAt, int $days = 30): ?string
     {
         if (!$transactedAt) {
