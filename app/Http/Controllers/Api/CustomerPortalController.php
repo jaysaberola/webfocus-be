@@ -467,10 +467,7 @@ class CustomerPortalController extends Controller
         return [
             'id' => $row->transaction_no,
             'invoiceId' => $this->invoiceId($row),
-            'serviceName' => TransactionLabelResolver::serviceCategory(
-                $firstItem?->name,
-                $firstItem?->item_type
-            ),
+            'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
             'plan' => $planLabel,
             'date' => optional($row->transacted_at)->format('Y-m-d'),
             'expiredDate' => optional($row->transacted_at?->copy()->addYear())->format('Y-m-d'),
@@ -514,16 +511,10 @@ class CustomerPortalController extends Controller
             'status' => $status,
             'canPay' => $canPay,
             'daysUntilDue' => $daysUntilDue,
-            'serviceName' => TransactionLabelResolver::serviceCategory(
-                $firstItem?->name,
-                $firstItem?->item_type
-            ),
+            'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
             'plan' => $planLabel,
             'subscription' => $planLabel,
-            'items' => TransactionLabelResolver::serviceCategory(
-                $firstItem?->name,
-                $firstItem?->item_type
-            ),
+            'items' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
         ];
     }
 

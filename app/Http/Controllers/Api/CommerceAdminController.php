@@ -316,8 +316,10 @@ class CommerceAdminController extends Controller
     {
         $customer = $proof->customer;
         $company = $customer?->full_name ?? 'Customer';
-        $items = $proof->salesTransaction?->items;
+        $transaction = $proof->salesTransaction;
+        $items = $transaction?->items;
         $firstItem = $items?->first();
+        $transactedAt = $transaction?->transacted_at;
 
         return [
             'id' => $proof->id,
@@ -330,11 +332,10 @@ class CommerceAdminController extends Controller
             'status' => $proof->status,
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
-            'amount' => (float) ($proof->salesTransaction?->grand_total ?? 0),
-            'serviceName' => TransactionLabelResolver::serviceCategory(
-                $firstItem?->name,
-                $firstItem?->item_type
-            ),
+            'issuedDate' => optional($transactedAt)->format('Y-m-d'),
+            'expiredDate' => TransactionLabelResolver::dueDateFrom($transactedAt),
+            'amount' => (float) ($transaction?->grand_total ?? 0),
+            'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($items),
             'plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
         ];
     }
