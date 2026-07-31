@@ -10,6 +10,7 @@ use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\SalesTransactionItem;
 use App\Models\User;
+use App\Support\TransactionLabelResolver;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
 use Illuminate\Http\Request;
@@ -451,7 +452,7 @@ class CustomerPortalController extends Controller
     {
         $firstItem = $row->items->first();
         $items = $row->items->map(fn ($item) => [
-            'name' => $this->resolveInvoiceServiceName($item->name, $item->item_type),
+            'name' => TransactionLabelResolver::serviceCategory($item->name, $item->item_type),
             'detail' => $item->name,
             'price' => (float) $item->total_price,
         ])->values()->all();
@@ -461,10 +462,16 @@ class CustomerPortalController extends Controller
         $isLive = in_array($payment, ['paid', 'completed', 'success'], true)
             && in_array($order, ['completed', 'active', 'delivered', 'live'], true);
 
+        $planLabel = TransactionLabelResolver::planLabel($row->items, $firstItem?->name);
+
         return [
             'id' => $row->transaction_no,
             'invoiceId' => $this->invoiceId($row),
-            'serviceName' => $this->resolveInvoiceServiceName($firstItem?->name, $firstItem?->item_type),
+            'serviceName' => TransactionLabelResolver::serviceCategory(
+                $firstItem?->name,
+                $firstItem?->item_type
+            ),
+            'plan' => $planLabel,
             'date' => optional($row->transacted_at)->format('Y-m-d'),
             'expiredDate' => optional($row->transacted_at?->copy()->addYear())->format('Y-m-d'),
             'total' => (float) $row->grand_total,
@@ -478,6 +485,7 @@ class CustomerPortalController extends Controller
     {
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         $firstItem = $row->items->first();
+        $planLabel = TransactionLabelResolver::planLabel($row->items, $firstItem?->name ?? $row->transaction_no);
         $dueAt = $row->transacted_at?->copy()->addDays(30);
         $daysUntilDue = $dueAt
             ? now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false)
@@ -506,10 +514,16 @@ class CustomerPortalController extends Controller
             'status' => $status,
             'canPay' => $canPay,
             'daysUntilDue' => $daysUntilDue,
-            'serviceName' => $this->resolveInvoiceServiceName($firstItem?->name, $firstItem?->item_type),
-            'plan' => $firstItem?->name ?? $row->transaction_no,
-            'subscription' => $firstItem?->name ?? $row->transaction_no,
-            'items' => $this->resolveInvoiceServiceName($firstItem?->name, $firstItem?->item_type),
+            'serviceName' => TransactionLabelResolver::serviceCategory(
+                $firstItem?->name,
+                $firstItem?->item_type
+            ),
+            'plan' => $planLabel,
+            'subscription' => $planLabel,
+            'items' => TransactionLabelResolver::serviceCategory(
+                $firstItem?->name,
+                $firstItem?->item_type
+            ),
         ];
     }
 
@@ -527,29 +541,6 @@ class CustomerPortalController extends Controller
             'status' => $proof->status,
             'notes' => $proof->notes,
         ];
-    }
-
-    private function resolveInvoiceServiceName(?string $name, ?string $itemType): string
-    {
-        $haystack = strtolower(trim(($name ?? '') . ' ' . ($itemType ?? '')));
-
-        if (str_contains($haystack, 'domain')) {
-            return 'Secure Domain';
-        }
-        if (str_contains($haystack, 'dms') || str_contains($haystack, 'document')) {
-            return 'DMS';
-        }
-        if (str_contains($haystack, 'design') || str_contains($haystack, 'canvas') || str_contains($haystack, 'web')) {
-            return 'Custom Web Design';
-        }
-        if (str_contains($haystack, 'credit')) {
-            return 'Account Credit';
-        }
-        if (str_contains($haystack, 'hosting') || str_contains($haystack, 'cloud') || str_contains($haystack, 'server')) {
-            return 'Hosting';
-        }
-
-        return $name ?: 'Service';
     }
 
     private function generatePaymentProofNo(): string

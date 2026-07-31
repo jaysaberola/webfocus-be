@@ -9,6 +9,7 @@ use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Support\TransactionLabelResolver;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
@@ -315,6 +316,8 @@ class CommerceAdminController extends Controller
     {
         $customer = $proof->customer;
         $company = $customer?->full_name ?? 'Customer';
+        $items = $proof->salesTransaction?->items;
+        $firstItem = $items?->first();
 
         return [
             'id' => $proof->id,
@@ -328,7 +331,11 @@ class CommerceAdminController extends Controller
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
             'amount' => (float) ($proof->salesTransaction?->grand_total ?? 0),
-            'serviceName' => $proof->salesTransaction?->items?->first()?->name,
+            'serviceName' => TransactionLabelResolver::serviceCategory(
+                $firstItem?->name,
+                $firstItem?->item_type
+            ),
+            'plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
         ];
     }
 

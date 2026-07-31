@@ -173,6 +173,56 @@ class SalesTransactionController extends Controller
         Request $request,
         SalesTransaction $salesTransaction
     ) {
+        $request->merge([
+            'transaction_no' => $request->input(
+                'transaction_no',
+                $salesTransaction->transaction_no
+            ),
+            'customer_id' => $request->input(
+                'customer_id',
+                $salesTransaction->customer_id
+            ),
+            'customer_name' => $request->input(
+                'customer_name',
+                $salesTransaction->customer_name
+            ),
+            'customer_email' => $request->input(
+                'customer_email',
+                $salesTransaction->customer_email
+            ),
+            'subtotal' => $request->input(
+                'subtotal',
+                $salesTransaction->subtotal
+            ),
+            'discount_total' => $request->input(
+                'discount_total',
+                $salesTransaction->discount_total
+            ),
+            'tax_total' => $request->input(
+                'tax_total',
+                $salesTransaction->tax_total
+            ),
+            'shipping_total' => $request->input(
+                'shipping_total',
+                $salesTransaction->shipping_total
+            ),
+            'payment_status' => $request->input(
+                'payment_status',
+                $salesTransaction->payment_status
+            ),
+            'order_status' => $request->input(
+                'order_status',
+                $salesTransaction->order_status
+            ),
+            'notes' => $request->has('notes')
+                ? $request->input('notes')
+                : $salesTransaction->notes,
+            'transacted_at' => $request->input(
+                'transacted_at',
+                optional($salesTransaction->transacted_at)?->format('Y-m-d')
+            ),
+        ]);
+
         $validated = $this->validatedPayload($request, $salesTransaction->id);
         $items = $validated['items'] ?? null;
         unset($validated['items']);
