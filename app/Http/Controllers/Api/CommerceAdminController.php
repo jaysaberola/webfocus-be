@@ -236,6 +236,81 @@ class CommerceAdminController extends Controller
         ]);
     }
 
+    public function notifications(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $rows = CustomerNotification::query()
+            ->where('reference_key', 'like', 'broadcast:%')
+            ->select('reference_key')
+            ->selectRaw('MIN(id) as id')
+            ->selectRaw('MAX(title) as title')
+            ->selectRaw('MAX(body) as body')
+            ->selectRaw('MAX(created_at) as created_at')
+            ->groupBy('reference_key')
+            ->orderByDesc('created_at')
+            ->paginate($request->integer('per_page', 50));
+
+        return response()->json([
+            'data' => $rows->through(fn ($row) => [
+                'id' => (int) $row->id,
+                'title' => $row->title,
+                'desc' => $row->body,
+                'date' => optional($row->created_at)->format('Y-m-d'),
+                'audience' => 'All Client Portals',
+                'status' => 'Sent',
+            ]),
+            'meta' => [
+                'current_page' => $rows->currentPage(),
+                'last_page' => $rows->lastPage(),
+                'total' => $rows->total(),
+            ],
+        ]);
+    }
+
+    public function broadcastNotification(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'body' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $customerIds = User::role('customer')
+            ->where('is_active', true)
+            ->pluck('id');
+
+        if ($customerIds->isEmpty()) {
+            return response()->json([
+                'message' => 'No active client accounts found to receive this broadcast.',
+            ], 422);
+        }
+
+        $referenceKey = 'broadcast:' . now()->format('YmdHis') . ':' . substr(md5($validated['title'] . $validated['body']), 0, 8);
+        $now = now();
+        $payload = $customerIds->map(fn ($customerId) => [
+            'customer_id' => $customerId,
+            'reference_key' => $referenceKey,
+            'title' => $validated['title'],
+            'body' => $validated['body'],
+            'type' => 'general',
+            'action_url' => '/public/dashboard?tab=notification',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->all();
+
+        CustomerNotification::query()->insert($payload);
+
+        return response()->json([
+            'message' => 'Broadcast notice successfully sent to all client portals.',
+            'data' => [
+                'recipients' => count($payload),
+                'referenceKey' => $referenceKey,
+            ],
+        ], 201);
+    }
+
     private function mapAdminPaymentProof(CustomerPaymentProof $proof): array
     {
         $customer = $proof->customer;

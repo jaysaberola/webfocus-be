@@ -72,6 +72,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/tickets', [CommerceAdminController::class, 'tickets']);
         Route::patch('/tickets/{ticket}', [CommerceAdminController::class, 'updateTicket']);
         Route::get('/services', [CommerceAdminController::class, 'services']);
+        Route::get('/notifications', [CommerceAdminController::class, 'notifications']);
+        Route::post('/notifications/broadcast', [CommerceAdminController::class, 'broadcastNotification']);
     });
 
     // Commerce data shared by CMS modules and Commerce Control Center
