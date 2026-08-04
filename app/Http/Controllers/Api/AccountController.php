@@ -80,18 +80,53 @@ class AccountController extends Controller
 
         $user->fname = $request->fname;
         $user->lname = $request->lname;
-        $user->mobile = $request->mobile;
-        $user->birth_date = $request->birth_date;
-        $user->address_street = $request->address_street;
-        $user->address_city = $request->address_city;
-        $user->address_municipality = $request->address_municipality;
-        $user->address_province = $request->address_province;
-        $user->address_zip = $request->address_zip;
+        if ($request->exists('mobile')) {
+            $user->mobile = $request->mobile;
+        }
+        if ($request->exists('birth_date')) {
+            $user->birth_date = $request->birth_date;
+        }
+        if ($request->exists('address_street')) {
+            $user->address_street = $request->address_street;
+        }
+        if ($request->exists('address_city')) {
+            $user->address_city = $request->address_city;
+        }
+        if ($request->exists('address_municipality')) {
+            $user->address_municipality = $request->address_municipality;
+        }
+        if ($request->exists('address_province')) {
+            $user->address_province = $request->address_province;
+        }
+        if ($request->exists('address_zip')) {
+            $user->address_zip = $request->address_zip;
+        }
         $user->save();
+        $user->refresh();
 
         return response()->json([
             'message' => 'Profile updated successfully',
-            'user' => $user,
+            'user' => array_merge(
+                $user->only([
+                    'id',
+                    'fname',
+                    'mname',
+                    'lname',
+                    'email',
+                    'mobile',
+                    'avatar',
+                    'birth_date',
+                    'address_street',
+                    'address_city',
+                    'address_municipality',
+                    'address_province',
+                    'address_zip',
+                ]),
+                [
+                    'role' => $user->getRoleNames()->first(),
+                    'roles' => $user->getRoleNames()->values()->all(),
+                ]
+            ),
         ]);
     }
 
