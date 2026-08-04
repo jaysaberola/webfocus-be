@@ -64,6 +64,7 @@ class CommerceAdminController extends Controller
         $pendingProfileChanges = CustomerProfileChangeRequest::query()
             ->where('status', 'Pending Review')
             ->count();
+        $pendingQuotations = $this->pendingWebDesignQuotationsQuery()->count();
         $openTickets = CustomerSupportTicket::query()->whereIn('status', ['Open', 'In Progress'])->count();
         $activeClients = User::role('customer')->where('is_active', true)->count();
         $activeServices = CustomerService::query()->where('status', 'Active')->count();
@@ -72,6 +73,7 @@ class CommerceAdminController extends Controller
             'data' => [
                 'counts' => [
                     'pendingApprovals' => $pendingProofs + $pendingProfileChanges,
+                    'pendingQuotations' => $pendingQuotations,
                     'openTickets' => $openTickets,
                     'activeClients' => $activeClients,
                     'activeServices' => $activeServices,
@@ -374,7 +376,9 @@ class CommerceAdminController extends Controller
     {
         $this->resolveStaff($request);
 
-        $rows = CustomerNotification::query()
+        $perPage = $request->integer('per_page', 50);
+
+        $broadcastRows = CustomerNotification::query()
             ->where('reference_key', 'like', 'broadcast:%')
             ->select('reference_key')
             ->selectRaw('MIN(id) as id')
@@ -383,21 +387,37 @@ class CommerceAdminController extends Controller
             ->selectRaw('MAX(created_at) as created_at')
             ->groupBy('reference_key')
             ->orderByDesc('created_at')
-            ->paginate($request->integer('per_page', 50));
+            ->paginate($perPage);
+
+        $clientAlerts = $this->pendingWebDesignQuotationsQuery()
+            ->with(['customer:id,fname,lname,email,mname', 'items'])
+            ->latest('transacted_at')
+            ->latest('id')
+            ->limit($perPage)
+            ->get()
+            ->map(fn (SalesTransaction $row) => $this->mapWebDesignQuotationAlert($row))
+            ->values();
 
         return response()->json([
-            'data' => $rows->through(fn ($row) => [
-                'id' => (int) $row->id,
-                'title' => $row->title,
-                'desc' => $row->body,
-                'date' => optional($row->created_at)->format('Y-m-d'),
-                'audience' => 'All Client Portals',
-                'status' => 'Sent',
-            ]),
+            'data' => [
+                'clientAlerts' => $clientAlerts,
+                'broadcasts' => $broadcastRows->getCollection()->map(fn ($row) => [
+                    'id' => (int) $row->id,
+                    'title' => $row->title,
+                    'desc' => $row->body,
+                    'date' => optional($row->created_at)->format('Y-m-d'),
+                    'audience' => 'All Client Portals',
+                    'status' => 'Sent',
+                    'kind' => 'broadcast',
+                ])->values(),
+            ],
             'meta' => [
-                'current_page' => $rows->currentPage(),
-                'last_page' => $rows->lastPage(),
-                'total' => $rows->total(),
+                'pendingQuotations' => $clientAlerts->count(),
+                'broadcasts' => [
+                    'current_page' => $broadcastRows->currentPage(),
+                    'last_page' => $broadcastRows->lastPage(),
+                    'total' => $broadcastRows->total(),
+                ],
             ],
         ]);
     }
@@ -660,6 +680,64 @@ class CommerceAdminController extends Controller
             'dueDate' => optional($row->transacted_at)->format('Y-m-d'),
             'amount' => (float) $row->grand_total,
             'status' => 'Overdue',
+        ];
+    }
+
+    private function pendingWebDesignQuotationsQuery()
+    {
+        return SalesTransaction::query()
+            ->where(function ($query) {
+                $query->where('notes', 'like', '%Pricing: Pending Quotation%')
+                    ->orWhere(function ($inner) {
+                        $inner->where(function ($notes) {
+                            $notes->whereNull('notes')
+                                ->orWhere('notes', 'not like', '%Pricing: Set by Sales%');
+                        })
+                            ->where('grand_total', '<=', 0)
+                            ->whereHas('items', function ($items) {
+                                $items->where(function ($item) {
+                                    $item->where('item_type', 'like', '%web_design%')
+                                        ->orWhere('item_type', 'like', '%webdesign%')
+                                        ->orWhere('name', 'like', '%web design%')
+                                        ->orWhere('name', 'like', '%Starter Launch%')
+                                        ->orWhere('name', 'like', '%Professional Corporate%')
+                                        ->orWhere('name', 'like', '%E-Commerce%');
+                                });
+                            });
+                    });
+            })
+            ->where(function ($query) {
+                $query->whereNull('notes')
+                    ->orWhere('notes', 'not like', '%Pricing: Set by Sales%');
+            });
+    }
+
+    private function mapWebDesignQuotationAlert(SalesTransaction $row): array
+    {
+        $customer = $row->customer;
+        $client = $row->customer_name
+            ?: (trim(($customer?->mname ?: '') !== ''
+                ? (string) $customer->mname
+                : ($customer?->full_name ?? 'Client')));
+        $itemNames = $row->items
+            ? $row->items->pluck('name')->filter()->take(3)->implode(', ')
+            : '';
+
+        return [
+            'id' => (int) $row->id,
+            'kind' => 'web_design_quotation',
+            'title' => 'Web Design Quotation Request',
+            'desc' => trim(
+                "{$client} checked out a web design package"
+                . ($itemNames ? " ({$itemNames})" : '')
+                . ". Transaction {$row->transaction_no} needs Sales pricing."
+            ),
+            'date' => optional($row->transacted_at ?? $row->created_at)->format('Y-m-d H:i'),
+            'audience' => $client,
+            'email' => $row->customer_email ?: ($customer?->email),
+            'transactionNo' => $row->transaction_no,
+            'status' => 'Needs Pricing',
+            'actionUrl' => '/public/commerce-admin?tab=transactions',
         ];
     }
 }

@@ -3,12 +3,16 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\WebDesignQuotationMail;
+use App\Models\CustomerNotification;
 use App\Models\SalesTransaction;
+use App\Models\Setting;
 use App\Models\User;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rule;
 use Throwable;
 
@@ -72,6 +76,8 @@ class SalesTransactionController extends Controller
             app(CustomerPortalProvisioner::class)
                 ->provisionFromTransaction($transaction->fresh(['items']));
         }
+
+        $this->notifyCustomerCareIfWebDesignQuotation($transaction->fresh(['items']));
 
         return response()->json([
             'message' => 'Sales transaction created successfully',
@@ -403,5 +409,74 @@ class SalesTransactionController extends Controller
         $next = $latestNumber + 1;
 
         return $prefix . str_pad((string) $next, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function notifyCustomerCareIfWebDesignQuotation(SalesTransaction $transaction): void
+    {
+        $notes = (string) ($transaction->notes ?? '');
+        $items = $transaction->items ?? collect();
+        $isQuotation = str_contains($notes, 'Pricing: Pending Quotation')
+            || $items->contains(function ($item) {
+                $type = strtolower((string) ($item->item_type ?? ''));
+                $name = strtolower((string) ($item->name ?? ''));
+
+                return str_contains($type, 'web_design')
+                    || str_contains($type, 'webdesign')
+                    || str_contains($name, 'web design')
+                    || str_contains($name, 'starter launch')
+                    || str_contains($name, 'professional corporate')
+                    || str_contains($name, 'e-commerce');
+            });
+
+        if (! $isQuotation) {
+            return;
+        }
+
+        $itemNames = $items->pluck('name')->filter()->take(3)->implode(', ');
+        $clientLabel = $transaction->customer_name
+            ?: ($transaction->customer?->full_name ?? 'Client');
+
+        if ($transaction->customer_id) {
+            CustomerNotification::create([
+                'customer_id' => $transaction->customer_id,
+                'title' => 'Web Design Quotation Submitted',
+                'body' => 'Your web design quotation request '
+                    . $transaction->transaction_no
+                    . ($itemNames ? " ({$itemNames})" : '')
+                    . ' was sent to Sales / Customer Care for pricing.',
+                'type' => 'general',
+                'action_url' => '/public/dashboard?tab=orders',
+            ]);
+        }
+
+        $staffIds = User::role(['sales_admin', 'admin', 'customer_care', 'finance_admin'])
+            ->where('is_active', true)
+            ->pluck('id');
+
+        $referenceKey = 'admin:webdesign-quotation:' . $transaction->id;
+        foreach ($staffIds as $staffId) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $staffId,
+                    'reference_key' => $referenceKey,
+                ],
+                [
+                    'title' => 'Web Design Quotation Request',
+                    'body' => "{$clientLabel} submitted a Pending Quotation checkout"
+                        . ($itemNames ? " for {$itemNames}" : '')
+                        . " ({$transaction->transaction_no}). Set the package price in Transactions.",
+                    'type' => 'web_design_quotation',
+                    'action_url' => '/public/commerce-admin?tab=transactions',
+                ]
+            );
+        }
+
+        $to = Setting::query()->value('email') ?: 'customercare@webfocus.ph';
+
+        try {
+            Mail::to($to)->send(new WebDesignQuotationMail($transaction));
+        } catch (Throwable $exception) {
+            report($exception);
+        }
     }
 }
