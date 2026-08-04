@@ -31,6 +31,7 @@ class DatabaseSeeder extends Seeder
             MenuSeeder::class,
             ArticleSeeder::class,
             HostingCatalogSeeder::class,
+            WebDesignProductSeeder::class,
             SettingSeeder::class,
             DataPrivacySeeder::class,
             CustomerPortalSeeder::class,

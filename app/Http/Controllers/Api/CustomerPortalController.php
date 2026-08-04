@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
+use App\Models\CustomerProfileChangeRequest;
 use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\SalesTransactionItem;
 use App\Models\User;
 use App\Support\TransactionLabelResolver;
+use App\Support\StorageUrl;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
 use Illuminate\Http\Request;
@@ -323,6 +325,112 @@ class CustomerPortalController extends Controller
         ], 201);
     }
 
+    public function pendingProfileChange(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+
+        $pending = CustomerProfileChangeRequest::query()
+            ->where('customer_id', $customer->id)
+            ->where('status', 'Pending Review')
+            ->latest()
+            ->first();
+
+        return response()->json([
+            'data' => $pending ? $this->mapProfileChangeRequest($pending) : null,
+        ]);
+    }
+
+    public function submitProfileChange(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+
+        $validated = $request->validate([
+            'fname' => ['required', 'string', 'max:255'],
+            'lname' => ['required', 'string', 'max:255'],
+            'mobile' => ['nullable', 'string', 'max:60'],
+            'mname' => ['nullable', 'string', 'max:255'],
+            'address_street' => ['nullable', 'string', 'max:255'],
+            'summary' => ['nullable', 'string', 'max:500'],
+            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg', 'max:1024'],
+        ]);
+
+        $hasPending = CustomerProfileChangeRequest::query()
+            ->where('customer_id', $customer->id)
+            ->where('status', 'Pending Review')
+            ->exists();
+
+        abort_if($hasPending, 422, 'You already have a profile change request awaiting admin review.');
+
+        $requestedPayload = [
+            'fname' => $validated['fname'],
+            'lname' => $validated['lname'],
+            'mobile' => $validated['mobile'] ?? null,
+            'mname' => $validated['mname'] ?? null,
+            'address_street' => $validated['address_street'] ?? null,
+        ];
+
+        $currentSnapshot = [
+            'fname' => $customer->fname,
+            'lname' => $customer->lname,
+            'mobile' => $customer->mobile,
+            'mname' => $customer->mname,
+            'address_street' => $customer->address_street,
+            'avatar' => $customer->avatar,
+        ];
+
+        if ($request->hasFile('avatar')) {
+            $requestedPayload['avatar_path'] = $request->file('avatar')->store(
+                'profile-change-requests/' . $customer->id,
+                'public'
+            );
+        }
+
+        $hasProfileFieldChanges = collect($requestedPayload)
+            ->except(['avatar_path'])
+            ->some(function ($value, $key) use ($currentSnapshot) {
+                return trim((string) ($value ?? '')) !== trim((string) ($currentSnapshot[$key] ?? ''));
+            });
+
+        abort_unless(
+            $hasProfileFieldChanges || !empty($requestedPayload['avatar_path']),
+            422,
+            'No profile changes were detected.'
+        );
+
+        $summary = $validated['summary'] ?? null;
+        if (!$summary) {
+            if (!empty($requestedPayload['avatar_path']) && !$hasProfileFieldChanges) {
+                $summary = 'Update profile photo for ' . $customer->email;
+            } else {
+                $summary = 'Update representative, phone, company, and billing address for ' . $customer->email;
+            }
+        }
+
+        $changeRequest = CustomerProfileChangeRequest::create([
+            'customer_id' => $customer->id,
+            'request_no' => $this->generateProfileChangeRequestNo(),
+            'status' => 'Pending Review',
+            'summary' => $summary,
+            'requested_payload' => $requestedPayload,
+            'current_snapshot' => $currentSnapshot,
+        ]);
+
+        CustomerNotification::create([
+            'customer_id' => $customer->id,
+            'title' => 'Profile Change Submitted',
+            'body' => 'Your profile update request ' . $changeRequest->request_no . ' is pending admin approval.',
+            'type' => 'account',
+            'action_url' => '/public/dashboard?tab=account',
+        ]);
+
+        app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+
+        return response()->json([
+            'message' => 'Profile changes sent for admin approval.',
+            'data' => $this->mapProfileChangeRequest($changeRequest),
+        ], 201);
+    }
+
     public function payInvoice(Request $request)
     {
         $customer = $this->resolveCustomer($request);
@@ -526,13 +634,46 @@ class CustomerPortalController extends Controller
             'recordId' => $proof->id,
             'invoiceId' => $proof->invoice_id,
             'fileName' => $proof->file_name,
-            'fileUrl' => $proof->file_path
-                ? url(Storage::disk('public')->url($proof->file_path))
-                : null,
+            'fileUrl' => StorageUrl::publicAsset($proof->file_path),
             'date' => optional($proof->created_at)->format('Y-m-d'),
             'status' => $proof->status,
             'notes' => $proof->notes,
         ];
+    }
+
+    private function mapProfileChangeRequest(CustomerProfileChangeRequest $request): array
+    {
+        $avatarPath = $request->requested_payload['avatar_path'] ?? null;
+
+        return [
+            'id' => $request->id,
+            'reference' => $request->request_no,
+            'submittedAt' => optional($request->created_at)->format('M j, Y g:i A'),
+            'status' => $request->status === 'Pending Review'
+                ? 'Pending Admin Review'
+                : $request->status,
+            'summary' => $request->summary,
+            'requestedPayload' => $request->requested_payload,
+            'currentSnapshot' => $request->current_snapshot,
+            'pendingAvatarUrl' => StorageUrl::publicAsset($avatarPath),
+            'currentAvatarUrl' => StorageUrl::publicAsset($request->current_snapshot['avatar'] ?? null),
+        ];
+    }
+
+    private function generateProfileChangeRequestNo(): string
+    {
+        $prefix = 'APR-' . now()->format('Ymd') . '-';
+        $latest = CustomerProfileChangeRequest::query()
+            ->where('request_no', 'like', $prefix . '%')
+            ->orderByDesc('request_no')
+            ->value('request_no');
+
+        $next = 1;
+        if ($latest && preg_match('/-(\d+)$/', $latest, $matches)) {
+            $next = ((int) $matches[1]) + 1;
+        }
+
+        return $prefix . str_pad((string) $next, 4, '0', STR_PAD_LEFT);
     }
 
     private function generatePaymentProofNo(): string

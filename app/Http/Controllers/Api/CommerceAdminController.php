@@ -5,11 +5,13 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
+use App\Models\CustomerProfileChangeRequest;
 use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\User;
 use App\Support\TransactionLabelResolver;
+use App\Support\StorageUrl;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
@@ -59,6 +61,9 @@ class CommerceAdminController extends Controller
             ->map(fn (SalesTransaction $row) => $this->mapOverdueInvoice($row));
 
         $pendingProofs = CustomerPaymentProof::query()->where('status', 'Pending Review')->count();
+        $pendingProfileChanges = CustomerProfileChangeRequest::query()
+            ->where('status', 'Pending Review')
+            ->count();
         $openTickets = CustomerSupportTicket::query()->whereIn('status', ['Open', 'In Progress'])->count();
         $activeClients = User::role('customer')->where('is_active', true)->count();
         $activeServices = CustomerService::query()->where('status', 'Active')->count();
@@ -66,7 +71,7 @@ class CommerceAdminController extends Controller
         return response()->json([
             'data' => [
                 'counts' => [
-                    'pendingApprovals' => $pendingProofs,
+                    'pendingApprovals' => $pendingProofs + $pendingProfileChanges,
                     'openTickets' => $openTickets,
                     'activeClients' => $activeClients,
                     'activeServices' => $activeServices,
@@ -75,6 +80,39 @@ class CommerceAdminController extends Controller
                 'expiringServices' => $expiringServices,
                 'overdueInvoices' => $overdueInvoices,
             ],
+        ]);
+    }
+
+    public function approvals(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $status = $request->input('status', 'Pending Review');
+
+        $proofRows = CustomerPaymentProof::query()
+            ->with(['customer:id,fname,lname,email', 'salesTransaction.items'])
+            ->when($status !== 'all', fn ($q) => $q->where('status', $status))
+            ->latest()
+            ->get()
+            ->map(fn (CustomerPaymentProof $proof) => array_merge(
+                $this->mapAdminPaymentProof($proof),
+                ['kind' => 'payment_proof']
+            ));
+
+        $profileRows = CustomerProfileChangeRequest::query()
+            ->with('customer:id,fname,lname,email,mname')
+            ->when($status !== 'all', fn ($q) => $q->where('status', $status))
+            ->latest()
+            ->get()
+            ->map(fn (CustomerProfileChangeRequest $row) => $this->mapAdminProfileChangeRequest($row));
+
+        $merged = $proofRows
+            ->concat($profileRows)
+            ->sortByDesc(fn (array $row) => $row['submittedAt'] ?? '')
+            ->values();
+
+        return response()->json([
+            'data' => $merged,
         ]);
     }
 
@@ -91,7 +129,10 @@ class CommerceAdminController extends Controller
             ->paginate($request->integer('per_page', 20));
 
         return response()->json([
-            'data' => $rows->through(fn (CustomerPaymentProof $proof) => $this->mapAdminPaymentProof($proof)),
+            'data' => $rows->through(fn (CustomerPaymentProof $proof) => array_merge(
+                $this->mapAdminPaymentProof($proof),
+                ['kind' => 'payment_proof']
+            )),
             'meta' => [
                 'current_page' => $rows->currentPage(),
                 'last_page' => $rows->lastPage(),
@@ -138,6 +179,97 @@ class CommerceAdminController extends Controller
         return response()->json([
             'message' => 'Payment proof verified and invoice credited.',
             'data' => $this->mapAdminPaymentProof($paymentProof->fresh(['customer', 'salesTransaction.items'])),
+        ]);
+    }
+
+    public function approveProfileChange(Request $request, CustomerProfileChangeRequest $profileChangeRequest)
+    {
+        $this->resolveStaff($request);
+        abort_unless(
+            $profileChangeRequest->status === 'Pending Review',
+            422,
+            'Only pending profile change requests can be approved.'
+        );
+
+        $customer = $profileChangeRequest->customer;
+        abort_unless($customer, 422, 'Customer record not found for this profile change request.');
+
+        $payload = $profileChangeRequest->requested_payload ?? [];
+
+        $updates = [
+            'fname' => $payload['fname'] ?? $customer->fname,
+            'lname' => $payload['lname'] ?? $customer->lname,
+            'mobile' => $payload['mobile'] ?? $customer->mobile,
+            'mname' => $payload['mname'] ?? $customer->mname,
+            'address_street' => $payload['address_street'] ?? $customer->address_street,
+        ];
+
+        if (!empty($payload['avatar_path'])) {
+            $updates['avatar'] = $this->resolveApprovedProfileAvatarPath(
+                $customer,
+                $payload['avatar_path']
+            );
+        }
+
+        $customer->update($updates);
+
+        $profileChangeRequest->update([
+            'status' => 'Approved',
+            'reviewed_at' => now(),
+        ]);
+
+        CustomerNotification::create([
+            'customer_id' => $customer->id,
+            'title' => 'Profile Changes Approved',
+            'body' => 'Your profile update request ' . $profileChangeRequest->request_no . ' has been approved and applied.',
+            'type' => 'account',
+            'action_url' => '/public/dashboard?tab=account',
+        ]);
+
+        app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+
+        return response()->json([
+            'message' => 'Profile change approved and applied.',
+            'data' => $this->mapAdminProfileChangeRequest($profileChangeRequest->fresh('customer')),
+        ]);
+    }
+
+    public function rejectProfileChange(Request $request, CustomerProfileChangeRequest $profileChangeRequest)
+    {
+        $this->resolveStaff($request);
+        abort_unless(
+            $profileChangeRequest->status === 'Pending Review',
+            422,
+            'Only pending profile change requests can be rejected.'
+        );
+
+        $validated = $request->validate([
+            'reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $this->cleanupPendingProfileAvatar($profileChangeRequest->requested_payload ?? []);
+
+        $profileChangeRequest->update([
+            'status' => 'Rejected',
+            'reviewed_at' => now(),
+            'notes' => trim(($profileChangeRequest->notes ?? '') . ($validated['reason'] ?? '' ? "\nRejected: {$validated['reason']}" : '')),
+        ]);
+
+        if ($profileChangeRequest->customer_id) {
+            CustomerNotification::create([
+                'customer_id' => $profileChangeRequest->customer_id,
+                'title' => 'Profile Changes Need Review',
+                'body' => 'Your profile update request ' . $profileChangeRequest->request_no . ' could not be approved. Please review your details or contact support.',
+                'type' => 'account',
+                'action_url' => '/public/dashboard?tab=account',
+            ]);
+
+            app(CustomerPortalNotificationSync::class)->syncForCustomer($profileChangeRequest->customer_id);
+        }
+
+        return response()->json([
+            'message' => 'Profile change rejected.',
+            'data' => $this->mapAdminProfileChangeRequest($profileChangeRequest->fresh('customer')),
         ]);
     }
 
@@ -223,6 +355,7 @@ class CommerceAdminController extends Controller
 
         $rows = CustomerService::query()
             ->with(['customer:id,fname,lname,email', 'salesTransaction'])
+            ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
             ->latest()
             ->paginate($request->integer('per_page', 20));
@@ -312,6 +445,124 @@ class CommerceAdminController extends Controller
         ], 201);
     }
 
+    private function mapAdminProfileChangeRequest(CustomerProfileChangeRequest $request): array
+    {
+        $customer = $request->customer;
+        $client = trim(($customer?->mname ?: '') !== ''
+            ? $customer->mname
+            : ($customer?->full_name ?? 'Customer'));
+        $payload = $request->requested_payload ?? [];
+        $changes = $this->profileChangeFields($request);
+        $avatarPath = $payload['avatar_path'] ?? null;
+
+        return [
+            'id' => $request->id,
+            'kind' => 'profile_change',
+            'proofNo' => $request->request_no,
+            'invoiceId' => $request->request_no,
+            'client' => $client,
+            'email' => $customer?->email,
+            'fileName' => $avatarPath ? basename($avatarPath) : '',
+            'fileUrl' => StorageUrl::publicAsset($avatarPath),
+            'status' => $request->status,
+            'notes' => $request->notes,
+            'summary' => $request->summary,
+            'changes' => $changes,
+            'currentAvatarUrl' => StorageUrl::publicAsset($customer?->avatar),
+            'submittedAt' => optional($request->created_at)->format('Y-m-d H:i'),
+            'issuedDate' => optional($request->created_at)->format('M j, Y'),
+            'expiredDate' => optional($request->created_at)?->copy()->addDays(7)->format('M j, Y'),
+            'amount' => 0,
+            'serviceName' => 'Profile Change',
+            'plan' => $this->profileChangePlanLabel($payload),
+        ];
+    }
+
+    private function profileChangeFields(CustomerProfileChangeRequest $request): array
+    {
+        $current = $request->current_snapshot ?? [];
+        $requested = $request->requested_payload ?? [];
+        $labels = [
+            'fname' => 'First Name',
+            'lname' => 'Last Name',
+            'mobile' => 'Mobile Phone',
+            'mname' => 'Company Legal Name',
+            'address_street' => 'Billing Address',
+        ];
+        $changes = [];
+
+        foreach ($labels as $key => $label) {
+            $from = trim((string) ($current[$key] ?? ''));
+            $to = trim((string) ($requested[$key] ?? ''));
+            if ($from !== $to) {
+                $changes[] = [
+                    'field' => $key,
+                    'label' => $label,
+                    'from' => $from ?: '—',
+                    'to' => $to ?: '—',
+                ];
+            }
+        }
+
+        $currentAvatar = $current['avatar'] ?? null;
+        $requestedAvatar = $requested['avatar_path'] ?? null;
+        if ($requestedAvatar) {
+            $changes[] = [
+                'field' => 'avatar',
+                'label' => 'Profile Photo',
+                'from' => StorageUrl::publicAsset($currentAvatar) ?? '—',
+                'to' => StorageUrl::publicAsset($requestedAvatar) ?? '—',
+            ];
+        }
+
+        return $changes;
+    }
+
+    private function resolveApprovedProfileAvatarPath(User $customer, string $pendingPath): string
+    {
+        if (!Storage::disk('public')->exists($pendingPath)) {
+            abort(422, 'The requested profile photo file could not be found. Ask the customer to submit again.');
+        }
+
+        $extension = pathinfo($pendingPath, PATHINFO_EXTENSION) ?: 'jpg';
+        $newPath = 'avatars/' . $customer->id . '-' . now()->format('YmdHis') . '.' . $extension;
+        Storage::disk('public')->move($pendingPath, $newPath);
+
+        if ($customer->avatar && Storage::disk('public')->exists($customer->avatar)) {
+            Storage::disk('public')->delete($customer->avatar);
+        }
+
+        return $newPath;
+    }
+
+    private function cleanupPendingProfileAvatar(array $payload): void
+    {
+        $path = $payload['avatar_path'] ?? null;
+        if ($path && Storage::disk('public')->exists($path)) {
+            Storage::disk('public')->delete($path);
+        }
+    }
+
+    private function profileChangePlanLabel(array $payload): string
+    {
+        if (!empty($payload['avatar_path'])) {
+            $parts = array_filter([
+                'Profile photo update',
+                trim(($payload['fname'] ?? '') . ' ' . ($payload['lname'] ?? '')),
+                $payload['mname'] ?? null,
+            ]);
+            return implode(' · ', $parts);
+        }
+
+        $parts = array_filter([
+            trim(($payload['fname'] ?? '') . ' ' . ($payload['lname'] ?? '')),
+            $payload['mname'] ?? null,
+            $payload['mobile'] ?? null,
+        ]);
+
+        return $parts ? implode(' · ', $parts) : 'Profile update request';
+    }
+
     private function mapAdminPaymentProof(CustomerPaymentProof $proof): array
     {
         $customer = $proof->customer;
@@ -328,7 +579,7 @@ class CommerceAdminController extends Controller
             'client' => $company,
             'email' => $customer?->email,
             'fileName' => $proof->file_name,
-            'fileUrl' => $proof->file_path ? url(Storage::disk('public')->url($proof->file_path)) : null,
+            'fileUrl' => StorageUrl::publicAsset($proof->file_path),
             'status' => $proof->status,
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),

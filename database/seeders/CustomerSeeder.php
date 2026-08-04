@@ -27,15 +27,30 @@ class CustomerSeeder extends Seeder
             [
                 'fname' => 'Juan',
                 'lname' => 'Dela Cruz',
-                'mobile' => '+63 917 555 1234',
-                'address_street' => 'Antel Global Corporate Center, Ortigas Center',
-                'address_city' => 'Pasig City',
+                'mname' => 'Apex Global Corp',
+                'mobile' => '+639175551234',
+                'phone' => '81234567',
+                'address_street' => 'BGC Taguig, Metro Manila',
+                'address_city' => 'Taguig City',
                 'address_province' => 'Metro Manila',
-                'address_zip' => '1605',
+                'address_zip' => '1634',
                 'password' => Hash::make('password'),
                 'is_active' => true,
             ]
         );
+
+        $customer->fill([
+            'fname' => 'Juan',
+            'lname' => 'Dela Cruz',
+            'mname' => 'Apex Global Corp',
+            'mobile' => '+639175551234',
+            'phone' => '81234567',
+            'address_street' => 'BGC Taguig, Metro Manila',
+            'address_city' => 'Taguig City',
+            'address_province' => 'Metro Manila',
+            'address_zip' => '1634',
+            'is_active' => true,
+        ])->save();
 
         $customer->syncRoles([$customerRole]);
     }

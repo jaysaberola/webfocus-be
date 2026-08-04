@@ -146,6 +146,37 @@ class RoleSeeder extends Seeder
             'menus.view',
         ]);
 
+        $marketingPermissions = [
+            'dashboard.view',
+            'pages.view',
+            'pages.create',
+            'pages.edit',
+            'albums.view',
+            'albums.create',
+            'albums.edit',
+            'file_manager.manage',
+            'menus.view',
+            'menus.create',
+            'menus.edit',
+            'commerce_dashboard.view',
+            'customers.manage',
+            'commerce_managed.view',
+            'commerce_managed.manage',
+            'commerce_notifications.view',
+            'commerce_notifications.manage',
+            'commerce_helpdesk.view',
+            'commerce_helpdesk.create',
+            'commerce_helpdesk.update',
+        ];
+
+        $marketing = Role::firstOrCreate(
+            ['name' => 'marketing', 'guard_name' => 'sanctum'],
+            ['description' => 'Marketing']
+        );
+        $marketing->description = 'Marketing';
+        $marketing->save();
+        $marketing->syncPermissions($marketingPermissions);
+
         $customer = Role::firstOrCreate(
             ['name' => 'customer', 'guard_name' => 'sanctum'],
             ['description' => 'Customer']

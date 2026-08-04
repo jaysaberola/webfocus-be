@@ -62,13 +62,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/notifications/{notification}', [CustomerPortalController::class, 'deleteNotification']);
         Route::get('/tickets', [CustomerPortalController::class, 'tickets']);
         Route::post('/tickets', [CustomerPortalController::class, 'storeTicket']);
+        Route::get('/profile-change-requests/pending', [CustomerPortalController::class, 'pendingProfileChange']);
+        Route::post('/profile-change-requests', [CustomerPortalController::class, 'submitProfileChange']);
     });
 
     Route::prefix('commerce-admin')->group(function () {
         Route::get('/dashboard', [CommerceAdminController::class, 'dashboard']);
+        Route::get('/approvals', [CommerceAdminController::class, 'approvals']);
         Route::get('/payment-proofs', [CommerceAdminController::class, 'paymentProofs']);
         Route::patch('/payment-proofs/{paymentProof}/verify', [CommerceAdminController::class, 'verifyPaymentProof']);
         Route::patch('/payment-proofs/{paymentProof}/reject', [CommerceAdminController::class, 'rejectPaymentProof']);
+        Route::patch('/profile-change-requests/{profileChangeRequest}/approve', [CommerceAdminController::class, 'approveProfileChange']);
+        Route::patch('/profile-change-requests/{profileChangeRequest}/reject', [CommerceAdminController::class, 'rejectProfileChange']);
         Route::get('/tickets', [CommerceAdminController::class, 'tickets']);
         Route::patch('/tickets/{ticket}', [CommerceAdminController::class, 'updateTicket']);
         Route::get('/services', [CommerceAdminController::class, 'services']);
@@ -83,6 +88,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/customers/{customer}', [CustomerController::class, 'show']);
     Route::put('/customers/{customer}', [CustomerController::class, 'update']);
     Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
+    Route::post('/customers/{customer}', [CustomerController::class, 'update']);
     Route::post('/customers', [CustomerController::class, 'store']);
 
     Route::middleware('cms.portal')->group(function () {

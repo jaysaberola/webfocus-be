@@ -61,4 +61,9 @@ class User extends Authenticatable implements AuditableContract
         return $this->hasMany(SocialMediaAccount::class);
     }
 
+    public function customerServices()
+    {
+        return $this->hasMany(CustomerService::class, 'customer_id');
+    }
+
 }

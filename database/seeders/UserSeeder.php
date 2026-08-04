@@ -17,6 +17,7 @@ class UserSeeder extends Seeder
         $salesAdminRole = Role::where('name', 'sales_admin')->where('guard_name', 'sanctum')->firstOrFail();
         $technicalSupportRole = Role::where('name', 'technical_support')->where('guard_name', 'sanctum')->firstOrFail();
         $customerCareRole = Role::where('name', 'customer_care')->where('guard_name', 'sanctum')->firstOrFail();
+        $marketingRole = Role::where('name', 'marketing')->where('guard_name', 'sanctum')->firstOrFail();
 
         $defaultPassword = Hash::make('password');
 
@@ -85,5 +86,16 @@ class UserSeeder extends Seeder
             ]
         );
         $customerCare->syncRoles([$customerCareRole]);
+
+        $marketing = User::firstOrCreate(
+            ['email' => 'marketing@webfocus.ph'],
+            [
+                'fname' => 'Marketing',
+                'lname' => 'Staff',
+                'password' => $defaultPassword,
+                'is_active' => true,
+            ]
+        );
+        $marketing->syncRoles([$marketingRole]);
     }
 }

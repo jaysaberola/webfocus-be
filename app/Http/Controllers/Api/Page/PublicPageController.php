@@ -12,6 +12,7 @@ use Illuminate\Http\Request;
 use App\Models\ArticleCategory;
 use App\Mail\ContactMessageMail;
 use App\Http\Controllers\Controller;
+use App\Support\RecaptchaVerifier;
 use Illuminate\Support\Facades\Mail;
 
 class PublicPageController extends Controller
@@ -275,13 +276,24 @@ class PublicPageController extends Controller
     public function send(Request $request)
     {
         $data = $request->validate([
-            'inquiry_type'   => 'required|string',
-            'first_name'     => 'required|string|max:100',
-            'last_name'      => 'required|string|max:100',
-            'email'          => 'required|email',
-            'contact_number' => 'required|string|max:30',
-            'message'        => 'required|string|max:2000',
+            'inquiry_type'        => 'required|string',
+            'first_name'          => 'required|string|max:100',
+            'last_name'           => 'required|string|max:100',
+            'email'               => 'required|email',
+            'contact_number'      => 'required|string|max:30',
+            'message'             => 'required|string|max:2000',
+            'preferred_services'  => 'nullable|array',
+            'preferred_services.*'=> 'string|max:100',
+            'recaptcha_token'     => 'required|string',
         ]);
+
+        if (! RecaptchaVerifier::verify($data['recaptcha_token'])) {
+            return response()->json([
+                'message' => 'reCAPTCHA verification failed. Please try again.',
+            ], 422);
+        }
+
+        unset($data['recaptcha_token']);
 
         Mail::to(config('mail.from.address'))
             ->send(new ContactMessageMail($data));

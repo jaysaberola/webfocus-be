@@ -97,6 +97,18 @@ class CustomerPortalSeeder extends Seeder
 
         CustomerService::create([
             'customer_id' => $customer->id,
+            'sales_transaction_id' => $txnPaidDesign->id,
+            'title' => 'Custom Professional Corporate',
+            'category' => 'Custom Web Design',
+            'plan' => 'Custom Professional Corporate',
+            'status' => 'Active',
+            'renew_label' => 'Renews',
+            'renew_at' => Carbon::parse('2027-06-01 08:00:00'),
+            'renew_note' => CustomerPortalProvisioner::formatRenewNote(Carbon::parse('2027-06-01 08:00:00')),
+        ]);
+
+        CustomerService::create([
+            'customer_id' => $customer->id,
             'sales_transaction_id' => $txnPaidDomain->id,
             'title' => 'Country Level Domain',
             'category' => 'Domains',

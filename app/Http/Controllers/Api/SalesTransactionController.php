@@ -95,6 +95,11 @@ class SalesTransactionController extends Controller
         /** @var User|null $customer */
         $customer = $request->user();
         abort_unless($customer, 401);
+        abort_unless(
+            $customer->hasRole('customer'),
+            403,
+            'Only client accounts can add items to the cart and complete checkout.'
+        );
 
         /*
          * Validate the profile before creating an order so missing mandatory
