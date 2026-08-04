@@ -39,6 +39,7 @@ class CustomerSeeder extends Seeder
             ]
         );
 
+        // Ensure demo checkout always has Paynamics billing fields (even if account already existed).
         $customer->fill([
             'fname' => 'Juan',
             'lname' => 'Dela Cruz',

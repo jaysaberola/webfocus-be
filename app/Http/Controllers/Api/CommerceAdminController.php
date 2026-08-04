@@ -15,6 +15,7 @@ use App\Support\StorageUrl;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -398,6 +399,43 @@ class CommerceAdminController extends Controller
             ->map(fn (SalesTransaction $row) => $this->mapWebDesignQuotationAlert($row))
             ->values();
 
+        // Also surface staff inbox copies (in case Sales refreshes before TX list catches up).
+        $staffAlertKeys = $clientAlerts
+            ->pluck('id')
+            ->map(fn ($id) => 'admin:webdesign-quotation:' . $id)
+            ->all();
+
+        $extraStaffAlerts = CustomerNotification::query()
+            ->where('reference_key', 'like', 'admin:webdesign-quotation:%')
+            ->when($staffAlertKeys, fn ($q) => $q->whereNotIn('reference_key', $staffAlertKeys))
+            ->select('reference_key')
+            ->selectRaw('MIN(id) as id')
+            ->selectRaw('MAX(title) as title')
+            ->selectRaw('MAX(body) as body')
+            ->selectRaw('MAX(created_at) as created_at')
+            ->groupBy('reference_key')
+            ->orderByDesc('created_at')
+            ->limit($perPage)
+            ->get()
+            ->map(function ($row) {
+                $txnId = (int) str_replace('admin:webdesign-quotation:', '', (string) $row->reference_key);
+
+                return [
+                    'id' => $txnId > 0 ? $txnId : (int) $row->id,
+                    'kind' => 'web_design_quotation',
+                    'title' => $row->title ?: 'Web Design Quotation Request',
+                    'desc' => $row->body,
+                    'date' => $this->formatAppDateTime($row->created_at),
+                    'audience' => 'Client',
+                    'email' => null,
+                    'transactionNo' => null,
+                    'status' => 'Needs Pricing',
+                    'actionUrl' => '/public/commerce-admin?tab=transactions',
+                ];
+            });
+
+        $clientAlerts = $clientAlerts->concat($extraStaffAlerts)->values();
+
         return response()->json([
             'data' => [
                 'clientAlerts' => $clientAlerts,
@@ -712,6 +750,21 @@ class CommerceAdminController extends Controller
             });
     }
 
+    private function formatAppDateTime(mixed $value, string $format = 'Y-m-d H:i'): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $carbon = $value instanceof CarbonInterface
+            ? $value->copy()
+            : Carbon::parse($value);
+
+        return $carbon
+            ->timezone(config('app.timezone', 'Asia/Manila'))
+            ->format($format);
+    }
+
     private function mapWebDesignQuotationAlert(SalesTransaction $row): array
     {
         $customer = $row->customer;
@@ -732,7 +785,10 @@ class CommerceAdminController extends Controller
                 . ($itemNames ? " ({$itemNames})" : '')
                 . ". Transaction {$row->transaction_no} needs Sales pricing."
             ),
-            'date' => optional($row->transacted_at ?? $row->created_at)->format('Y-m-d H:i'),
+            'date' => $this->formatAppDateTime(
+                // Prefer created_at (actual submit time); avoid UTC ISO stored as naive transacted_at.
+                $row->created_at ?? $row->transacted_at
+            ),
             'audience' => $client,
             'email' => $row->customer_email ?: ($customer?->email),
             'transactionNo' => $row->transaction_no,

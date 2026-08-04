@@ -10,6 +10,7 @@ use App\Models\Setting;
 use App\Models\User;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -63,6 +64,9 @@ class SalesTransactionController extends Controller
             ($validated['transaction_no'] ?? null) ?: $this->generateTransactionNo();
         $validated['subtotal'] = $this->calculateSubtotal($validated, $items);
         $validated['grand_total'] = $this->calculateGrandTotal($validated);
+        $validated['transacted_at'] = $this->normalizeTransactedAt(
+            $validated['transacted_at'] ?? null
+        );
         $validated['user_id'] = $request->user()?->id;
 
         $transaction = DB::transaction(function () use ($validated, $items) {
@@ -130,6 +134,9 @@ class SalesTransactionController extends Controller
             ($validated['transaction_no'] ?? null) ?: $this->generateTransactionNo();
         $validated['subtotal'] = $this->calculateSubtotal($validated, $items);
         $validated['grand_total'] = $this->calculateGrandTotal($validated);
+        $validated['transacted_at'] = $this->normalizeTransactedAt(
+            $validated['transacted_at'] ?? null
+        );
         $validated['payment_status'] = 'pending';
         $validated['order_status'] = 'pending';
         $validated['user_id'] = $customer->id;
@@ -242,6 +249,11 @@ class SalesTransactionController extends Controller
             ($validated['transaction_no'] ?? null) ?: $salesTransaction->transaction_no;
         $validated['subtotal'] = $this->calculateSubtotal($validated, $items);
         $validated['grand_total'] = $this->calculateGrandTotal($validated);
+        if (array_key_exists('transacted_at', $validated)) {
+            $validated['transacted_at'] = $this->normalizeTransactedAt(
+                $validated['transacted_at']
+            );
+        }
 
         DB::transaction(function () use ($salesTransaction, $validated, $items) {
             $salesTransaction->update($validated);
@@ -393,6 +405,16 @@ class SalesTransactionController extends Controller
             * (float) ($item['quantity'] ?? 1);
     }
 
+    private function normalizeTransactedAt(mixed $value): Carbon
+    {
+        if ($value === null || $value === '') {
+            return now();
+        }
+
+        // Browser sends UTC ISO (toISOString); store wall-clock in app timezone (Asia/Manila).
+        return Carbon::parse($value)->timezone(config('app.timezone', 'Asia/Manila'));
+    }
+
     private function generateTransactionNo(): string
     {
         $prefix = 'ST-' . now()->format('Ymd') . '-';
@@ -416,17 +438,21 @@ class SalesTransactionController extends Controller
         $notes = (string) ($transaction->notes ?? '');
         $items = $transaction->items ?? collect();
         $isQuotation = str_contains($notes, 'Pricing: Pending Quotation')
-            || $items->contains(function ($item) {
-                $type = strtolower((string) ($item->item_type ?? ''));
-                $name = strtolower((string) ($item->name ?? ''));
+            || (
+                ! str_contains($notes, 'Pricing: Set by Sales')
+                && (float) $transaction->grand_total <= 0
+                && $items->contains(function ($item) {
+                    $type = strtolower((string) ($item->item_type ?? ''));
+                    $name = strtolower((string) ($item->name ?? ''));
 
-                return str_contains($type, 'web_design')
-                    || str_contains($type, 'webdesign')
-                    || str_contains($name, 'web design')
-                    || str_contains($name, 'starter launch')
-                    || str_contains($name, 'professional corporate')
-                    || str_contains($name, 'e-commerce');
-            });
+                    return str_contains($type, 'web_design')
+                        || str_contains($type, 'webdesign')
+                        || str_contains($name, 'web design')
+                        || str_contains($name, 'starter launch')
+                        || str_contains($name, 'professional corporate')
+                        || str_contains($name, 'e-commerce');
+                })
+            );
 
         if (! $isQuotation) {
             return;
