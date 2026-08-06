@@ -26,6 +26,7 @@ class SalesTransactionController extends Controller
         $query = SalesTransaction::query()
             ->with([
                 'customer:id,fname,lname,email',
+                'user:id,fname,lname,email',
                 'items',
             ])
             ->when($request->search, function ($q) use ($request) {
@@ -87,6 +88,7 @@ class SalesTransactionController extends Controller
             'message' => 'Sales transaction created successfully',
             'data' => $transaction->load([
                 'customer:id,fname,lname,email',
+                'user:id,fname,lname,email',
                 'items',
             ]),
         ], 201);
@@ -273,6 +275,7 @@ class SalesTransactionController extends Controller
             'message' => 'Sales transaction updated successfully',
             'data' => $salesTransaction->fresh()->load([
                 'customer:id,fname,lname,email',
+                'user:id,fname,lname,email',
                 'items',
             ]),
         ]);

@@ -153,23 +153,70 @@ class CustomerPortalController extends Controller
         $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
         $this->assertInvoicePayable($transaction);
 
+        $invoiceId = $this->invoiceId($transaction);
+
+        $verifiedExists = CustomerPaymentProof::query()
+            ->where('customer_id', $customer->id)
+            ->where(function ($query) use ($transaction, $invoiceId) {
+                $query->where('sales_transaction_id', $transaction->id)
+                    ->orWhere('invoice_id', $invoiceId);
+            })
+            ->where('status', 'Verified & Credited')
+            ->exists();
+
+        abort_if($verifiedExists, 422, 'This invoice already has a verified payment proof.');
+
+        $pendingProofs = CustomerPaymentProof::query()
+            ->where('customer_id', $customer->id)
+            ->where(function ($query) use ($transaction, $invoiceId) {
+                $query->where('sales_transaction_id', $transaction->id)
+                    ->orWhere('invoice_id', $invoiceId);
+            })
+            ->where('status', 'Pending Review')
+            ->latest('id')
+            ->get();
+
         $file = $request->file('receipt');
         $path = $file->store('customer-payment-proofs/' . $customer->id, 'public');
 
-        $proof = CustomerPaymentProof::create([
-            'customer_id' => $customer->id,
-            'sales_transaction_id' => $transaction->id,
-            'proof_no' => $this->generatePaymentProofNo(),
-            'invoice_id' => $this->invoiceId($transaction),
-            'file_path' => $path,
-            'file_name' => $file->getClientOriginalName(),
-            'status' => 'Pending Review',
-            'notes' => $validated['notes'] ?? null,
-        ]);
+        if ($pendingProofs->isNotEmpty()) {
+            $proof = $pendingProofs->first();
+
+            foreach ($pendingProofs->skip(1) as $duplicate) {
+                $this->deletePaymentProofFile($duplicate->file_path);
+                $duplicate->delete();
+            }
+
+            $this->deletePaymentProofFile($proof->file_path);
+
+            $proof->update([
+                'file_path' => $path,
+                'file_name' => $file->getClientOriginalName(),
+                'notes' => $validated['notes'] ?? $proof->notes,
+                'status' => 'Pending Review',
+            ]);
+
+            $message = 'Payment proof updated. Your previous pending submission for this invoice was replaced.';
+            $statusCode = 200;
+        } else {
+            $proof = CustomerPaymentProof::create([
+                'customer_id' => $customer->id,
+                'sales_transaction_id' => $transaction->id,
+                'proof_no' => $this->generatePaymentProofNo(),
+                'invoice_id' => $invoiceId,
+                'file_path' => $path,
+                'file_name' => $file->getClientOriginalName(),
+                'status' => 'Pending Review',
+                'notes' => $validated['notes'] ?? null,
+            ]);
+
+            $message = 'Payment proof uploaded successfully';
+            $statusCode = 201;
+        }
 
         CustomerNotification::create([
             'customer_id' => $customer->id,
-            'title' => 'Payment Proof Uploaded',
+            'title' => $statusCode === 200 ? 'Payment Proof Updated' : 'Payment Proof Uploaded',
             'body' => 'We received your payment proof for ' . $proof->invoice_id . '. Our billing team will verify it shortly.',
             'type' => 'billing',
             'action_url' => '/public/dashboard?tab=billing',
@@ -178,9 +225,9 @@ class CustomerPortalController extends Controller
         app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
 
         return response()->json([
-            'message' => 'Payment proof uploaded successfully',
-            'data' => $this->mapPaymentProof($proof),
-        ], 201);
+            'message' => $message,
+            'data' => $this->mapPaymentProof($proof->fresh()),
+        ], $statusCode);
     }
 
     public function deletePaymentProof(Request $request, CustomerPaymentProof $paymentProof)
@@ -189,9 +236,7 @@ class CustomerPortalController extends Controller
         abort_unless((int) $paymentProof->customer_id === (int) $customer->id, 403);
         abort_if($paymentProof->status === 'Verified & Credited', 422, 'Verified payment proofs cannot be deleted.');
 
-        if ($paymentProof->file_path && Storage::disk('public')->exists($paymentProof->file_path)) {
-            Storage::disk('public')->delete($paymentProof->file_path);
-        }
+        $this->deletePaymentProofFile($paymentProof->file_path);
 
         $paymentProof->delete();
 
@@ -674,6 +719,13 @@ class CustomerPortalController extends Controller
         }
 
         return $prefix . str_pad((string) $next, 4, '0', STR_PAD_LEFT);
+    }
+
+    private function deletePaymentProofFile(?string $filePath): void
+    {
+        if ($filePath && Storage::disk('public')->exists($filePath)) {
+            Storage::disk('public')->delete($filePath);
+        }
     }
 
     private function generatePaymentProofNo(): string

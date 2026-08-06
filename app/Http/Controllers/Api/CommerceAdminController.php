@@ -30,6 +30,61 @@ class CommerceAdminController extends Controller
         return $user;
     }
 
+    public function assignableUsers(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $users = User::query()
+            ->with('roles')
+            ->where('is_active', true)
+            ->whereDoesntHave('roles', function ($query) {
+                $query->where('name', 'customer');
+            })
+            ->orderBy('fname')
+            ->orderBy('lname')
+            ->get()
+            ->map(fn (User $user) => [
+                'id' => $user->id,
+                'name' => trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')) ?: ($user->email ?? 'User'),
+                'email' => $user->email,
+                'role' => $user->getRoleNames()->first(),
+            ])
+            ->values();
+
+        return response()->json(['data' => $users]);
+    }
+
+    public function assignSalesTransaction(Request $request, SalesTransaction $salesTransaction)
+    {
+        $staff = $this->resolveStaff($request);
+        abort_unless(
+            $staff->hasAnyRole(['customer_care', 'admin']),
+            403,
+            'Only Customer Care can assign transactions.'
+        );
+
+        $validated = $request->validate([
+            'user_id' => ['required', 'integer', 'exists:users,id'],
+        ]);
+
+        $assignee = User::query()->with('roles')->findOrFail($validated['user_id']);
+        abort_unless((bool) $assignee->is_active, 422, 'Selected user is not active.');
+        abort_if($assignee->hasRole('customer'), 422, 'Customer accounts cannot be assigned to transactions.');
+
+        $salesTransaction->update(['user_id' => $assignee->id]);
+
+        $fresh = $salesTransaction->fresh()->load([
+            'customer:id,fname,lname,email',
+            'user:id,fname,lname,email',
+            'items',
+        ]);
+
+        return response()->json([
+            'message' => 'Transaction assigned successfully.',
+            'data' => $fresh,
+        ]);
+    }
+
     public function dashboard(Request $request)
     {
         $this->resolveStaff($request);
@@ -61,7 +116,7 @@ class CommerceAdminController extends Controller
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapOverdueInvoice($row));
 
-        $pendingProofs = CustomerPaymentProof::query()->where('status', 'Pending Review')->count();
+        $pendingProofs = $this->pendingPaymentProofCount();
         $pendingProfileChanges = CustomerProfileChangeRequest::query()
             ->where('status', 'Pending Review')
             ->count();
@@ -91,12 +146,21 @@ class CommerceAdminController extends Controller
         $this->resolveStaff($request);
 
         $status = $request->input('status', 'Pending Review');
+        $this->collapseDuplicatePendingPaymentProofs();
 
         $proofRows = CustomerPaymentProof::query()
             ->with(['customer:id,fname,lname,email', 'salesTransaction.items'])
             ->when($status !== 'all', fn ($q) => $q->where('status', $status))
             ->latest()
             ->get()
+            ->unique(function (CustomerPaymentProof $proof) {
+                if ($proof->status !== 'Pending Review') {
+                    return 'id:' . $proof->id;
+                }
+
+                return 'pending:' . ($proof->sales_transaction_id ?: $proof->invoice_id);
+            })
+            ->values()
             ->map(fn (CustomerPaymentProof $proof) => array_merge(
                 $this->mapAdminPaymentProof($proof),
                 ['kind' => 'payment_proof']
@@ -795,5 +859,40 @@ class CommerceAdminController extends Controller
             'status' => 'Needs Pricing',
             'actionUrl' => '/public/commerce-admin?tab=transactions',
         ];
+    }
+
+    private function pendingPaymentProofCount(): int
+    {
+        return (int) CustomerPaymentProof::query()
+            ->where('status', 'Pending Review')
+            ->selectRaw('COUNT(DISTINCT COALESCE(sales_transaction_id, invoice_id)) as aggregate')
+            ->value('aggregate');
+    }
+
+    /** Keep only the newest pending proof per invoice and remove older duplicates. */
+    private function collapseDuplicatePendingPaymentProofs(): void
+    {
+        $pending = CustomerPaymentProof::query()
+            ->where('status', 'Pending Review')
+            ->orderByDesc('id')
+            ->get(['id', 'invoice_id', 'sales_transaction_id', 'file_path']);
+
+        $seen = [];
+        foreach ($pending as $proof) {
+            $key = (string) ($proof->sales_transaction_id ?: $proof->invoice_id);
+            if ($key === '') {
+                $key = 'id:' . $proof->id;
+            }
+
+            if (isset($seen[$key])) {
+                if ($proof->file_path && Storage::disk('public')->exists($proof->file_path)) {
+                    Storage::disk('public')->delete($proof->file_path);
+                }
+                $proof->delete();
+                continue;
+            }
+
+            $seen[$key] = true;
+        }
     }
 }
