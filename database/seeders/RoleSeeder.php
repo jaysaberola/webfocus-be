@@ -49,8 +49,6 @@ class RoleSeeder extends Seeder
             'commerce_managed.manage',
             'commerce_contracts.view',
             'commerce_contracts.manage',
-            'commerce_catalog.view',
-            'commerce_catalog.manage',
             'products.manage',
             'inventory.view',
             'inventory.manage',

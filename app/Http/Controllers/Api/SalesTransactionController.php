@@ -493,9 +493,9 @@ class SalesTransactionController extends Controller
                     'title' => 'Web Design Quotation Request',
                     'body' => "{$clientLabel} submitted a Pending Quotation checkout"
                         . ($itemNames ? " for {$itemNames}" : '')
-                        . " ({$transaction->transaction_no}). Set the package price in Transactions.",
+                        . " ({$transaction->transaction_no}). Set the package price in Orders.",
                     'type' => 'web_design_quotation',
-                    'action_url' => '/public/commerce-admin?tab=transactions',
+                    'action_url' => '/public/commerce-admin?tab=orders',
                 ]
             );
         }

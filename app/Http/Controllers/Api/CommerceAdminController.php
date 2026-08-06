@@ -494,7 +494,7 @@ class CommerceAdminController extends Controller
                     'email' => null,
                     'transactionNo' => null,
                     'status' => 'Needs Pricing',
-                    'actionUrl' => '/public/commerce-admin?tab=transactions',
+                    'actionUrl' => '/public/commerce-admin?tab=orders',
                 ];
             });
 
@@ -857,7 +857,7 @@ class CommerceAdminController extends Controller
             'email' => $row->customer_email ?: ($customer?->email),
             'transactionNo' => $row->transaction_no,
             'status' => 'Needs Pricing',
-            'actionUrl' => '/public/commerce-admin?tab=transactions',
+            'actionUrl' => '/public/commerce-admin?tab=orders',
         ];
     }
 

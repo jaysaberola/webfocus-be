@@ -47,7 +47,7 @@
       @endif
 
       <p style="margin:22px 0 0;color:#64748b;font-size:13px;">
-        Please set the package price in Commerce Admin → Transactions using
+        Please set the package price in Commerce Admin → Orders using
         <strong>Set Web Design Price</strong>.
       </p>
     </div>
