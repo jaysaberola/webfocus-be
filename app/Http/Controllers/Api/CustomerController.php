@@ -30,7 +30,7 @@ class CustomerController extends Controller
 
         $perPage = $request->integer('per_page', 10);
 
-        $customers = User::with('roles')
+        $customers = User::with(['roles', 'owner:id,fname,lname,email'])
             ->withCount([
                 'customerServices as active_services_count' => fn ($q) => $q->where('status', 'Active'),
             ])
@@ -67,6 +67,11 @@ class CustomerController extends Controller
             ->paginate($perPage);
 
         $paginator = $customers->through(function ($customer) {
+                $owner = $customer->owner;
+                $ownerName = $owner
+                    ? (trim(($owner->fname ?? '') . ' ' . ($owner->lname ?? '')) ?: ($owner->email ?? null))
+                    : null;
+
                 return [
                     'id' => $customer->id,
                     'name' => $customer->mname ?: $customer->full_name,
@@ -79,6 +84,13 @@ class CustomerController extends Controller
                     'date_registered' => optional($customer->created_at)->format('F d, Y'),
                     'status' => $customer->is_active ? 'Active' : 'Inactive',
                     'active_services_count' => (int) ($customer->active_services_count ?? 0),
+                    'owner_id' => $customer->owner_id,
+                    'owner' => $owner ? [
+                        'id' => $owner->id,
+                        'name' => $ownerName,
+                        'email' => $owner->email,
+                    ] : null,
+                    'owner_name' => $ownerName,
                 ];
             });
 
@@ -305,6 +317,38 @@ class CustomerController extends Controller
                 'name' => $customer->mname ?: $customer->full_name,
                 'email' => $customer->email,
             ],
+        ]);
+    }
+
+    public function destroy(User $customer)
+    {
+        abort_unless($customer->hasRole(self::ROLE), 404);
+        $customer->delete();
+
+        return response()->json([
+            'message' => 'Customer deleted successfully',
+        ]);
+    }
+
+    public function bulkDestroy(Request $request)
+    {
+        $validated = $request->validate([
+            'ids' => ['required', 'array', 'min:1'],
+            'ids.*' => ['integer', 'exists:users,id'],
+        ]);
+
+        $customers = User::query()
+            ->role(self::ROLE)
+            ->whereIn('id', $validated['ids'])
+            ->get();
+
+        foreach ($customers as $customer) {
+            $customer->delete();
+        }
+
+        return response()->json([
+            'message' => $customers->count() . ' customer(s) deleted successfully',
+            'deleted' => $customers->pluck('id')->values(),
         ]);
     }
 

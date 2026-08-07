@@ -7,12 +7,13 @@ use Laravel\Sanctum\HasApiTokens;
 use Spatie\Permission\Traits\HasRoles;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use OwenIt\Auditing\Contracts\Auditable as AuditableContract;
 
 class User extends Authenticatable implements AuditableContract
 {
-    use HasApiTokens, HasFactory, Notifiable, HasRoles, Auditable;
+    use HasApiTokens, HasFactory, Notifiable, HasRoles, Auditable, SoftDeletes;
 
     protected $guard_name = 'sanctum';
 
@@ -37,6 +38,7 @@ class User extends Authenticatable implements AuditableContract
         'provider',
         'provider_id',
         'social_login',
+        'owner_id',
     ];
 
     protected $hidden = [
@@ -54,6 +56,16 @@ class User extends Authenticatable implements AuditableContract
     public function getFullNameAttribute(): string
     {
         return trim("{$this->fname} {$this->mname} {$this->lname}");
+    }
+
+    public function owner()
+    {
+        return $this->belongsTo(self::class, 'owner_id');
+    }
+
+    public function ownedCustomers()
+    {
+        return $this->hasMany(self::class, 'owner_id');
     }
 
     public function socialMediaAccounts()

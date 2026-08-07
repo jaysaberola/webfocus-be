@@ -81,17 +81,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/notifications/broadcast', [CommerceAdminController::class, 'broadcastNotification']);
         Route::get('/assignable-users', [CommerceAdminController::class, 'assignableUsers']);
         Route::patch('/sales-transactions/{salesTransaction}/assign', [CommerceAdminController::class, 'assignSalesTransaction']);
+        Route::patch('/customers/{customer}/assign-owner', [CommerceAdminController::class, 'assignCustomerOwner']);
     });
 
     // Commerce data shared by CMS modules and Commerce Control Center
     Route::apiResource('sales-transactions', SalesTransactionController::class)
         ->parameters(['sales-transactions' => 'salesTransaction']);
     Route::get('/customers', [CustomerController::class, 'index']);
+    Route::post('/customers', [CustomerController::class, 'store']);
+    Route::post('/customers/bulk-delete', [CustomerController::class, 'bulkDestroy']);
     Route::get('/customers/{customer}', [CustomerController::class, 'show']);
     Route::put('/customers/{customer}', [CustomerController::class, 'update']);
     Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
     Route::post('/customers/{customer}', [CustomerController::class, 'update']);
-    Route::post('/customers', [CustomerController::class, 'store']);
+    Route::delete('/customers/{customer}', [CustomerController::class, 'destroy']);
 
     Route::middleware('cms.portal')->group(function () {
         // dashboard

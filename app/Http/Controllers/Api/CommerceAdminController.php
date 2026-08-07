@@ -58,9 +58,9 @@ class CommerceAdminController extends Controller
     {
         $staff = $this->resolveStaff($request);
         abort_unless(
-            $staff->hasAnyRole(['customer_care', 'admin']),
+            $staff->hasAnyRole(['customer_care', 'finance_admin', 'sales_admin', 'admin']),
             403,
-            'Only Customer Care can assign transactions.'
+            'Only Customer Care, Finance Admin, or Sales Admin can assign transactions.'
         );
 
         $validated = $request->validate([
@@ -82,6 +82,50 @@ class CommerceAdminController extends Controller
         return response()->json([
             'message' => 'Transaction assigned successfully.',
             'data' => $fresh,
+        ]);
+    }
+
+    public function assignCustomerOwner(Request $request, User $customer)
+    {
+        $staff = $this->resolveStaff($request);
+        abort_unless(
+            $staff->hasAnyRole(['customer_care', 'admin']),
+            403,
+            'Only Customer Care can assign client owners.'
+        );
+        abort_unless($customer->hasRole('customer'), 404, 'Customer not found.');
+
+        $validated = $request->validate([
+            'owner_id' => ['nullable', 'integer', 'exists:users,id'],
+        ]);
+
+        $ownerId = $validated['owner_id'] ?? null;
+        if ($ownerId) {
+            $assignee = User::query()->with('roles')->findOrFail($ownerId);
+            abort_unless((bool) $assignee->is_active, 422, 'Selected user is not active.');
+            abort_if($assignee->hasRole('customer'), 422, 'Customer accounts cannot be assigned as client owners.');
+            abort_if($assignee->id === $customer->id, 422, 'A client cannot be assigned as their own owner.');
+        }
+
+        $customer->update(['owner_id' => $ownerId]);
+        $fresh = $customer->fresh()->load(['owner:id,fname,lname,email']);
+        $owner = $fresh->owner;
+        $ownerName = $owner
+            ? (trim(($owner->fname ?? '') . ' ' . ($owner->lname ?? '')) ?: ($owner->email ?? null))
+            : null;
+
+        return response()->json([
+            'message' => $ownerId ? 'Client owner assigned successfully.' : 'Client owner unassigned.',
+            'data' => [
+                'id' => $fresh->id,
+                'owner_id' => $fresh->owner_id,
+                'owner' => $owner ? [
+                    'id' => $owner->id,
+                    'name' => $ownerName,
+                    'email' => $owner->email,
+                ] : null,
+                'owner_name' => $ownerName,
+            ],
         ]);
     }
 
