@@ -7,7 +7,7 @@
   <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 6px 20px rgba(0,0,0,.12);">
     <div style="background:linear-gradient(135deg,#020617,#0f172a);padding:28px 20px;text-align:center;color:#fff;">
       <h2 style="margin:0;font-size:20px;font-weight:600;">Web Design Quotation Request</h2>
-      <p style="margin:8px 0 0;opacity:.85;font-size:13px;">Pending Quotation · Customer Care</p>
+      <p style="margin:8px 0 0;opacity:.85;font-size:13px;">Pending Quotation · Sales</p>
     </div>
 
     <div style="padding:28px 24px;color:#1f2937;font-size:14px;line-height:1.6;">

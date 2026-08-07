@@ -13,6 +13,7 @@ use App\Models\SalesTransactionItem;
 use App\Models\User;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
+use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
 use Illuminate\Http\Request;
@@ -222,6 +223,20 @@ class CustomerPortalController extends Controller
             'action_url' => '/public/dashboard?tab=billing',
         ]);
 
+        $clientLabel = trim(($customer->mname ?: '') !== ''
+            ? (string) $customer->mname
+            : trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''))) ?: ($customer->email ?? 'Client');
+
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $customer->id,
+            ['finance_admin', 'sales_admin', 'admin', 'customer_care'],
+            'admin:payment-proof:' . $proof->id,
+            'Payment Proof Pending Review',
+            "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}.",
+            'payment_proof',
+            '/public/commerce-admin?tab=approvals',
+        );
+
         app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
 
         return response()->json([
@@ -359,6 +374,20 @@ class CustomerPortalController extends Controller
             'action_url' => '/public/dashboard?tab=help',
         ]);
 
+        $clientLabel = trim(($customer->mname ?: '') !== ''
+            ? (string) $customer->mname
+            : trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''))) ?: ($customer->email ?? 'Client');
+
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $customer->id,
+            ['customer_care', 'technical_support', 'admin'],
+            'admin:support-ticket:' . $ticket->id,
+            'New Support Ticket',
+            "{$clientLabel} submitted ticket {$ticket->ticket_no}: {$ticket->subject}",
+            'support_ticket',
+            '/public/commerce-admin?tab=helpdesk',
+        );
+
         return response()->json([
             'message' => 'Support ticket created',
             'data' => [
@@ -467,6 +496,20 @@ class CustomerPortalController extends Controller
             'type' => 'account',
             'action_url' => '/public/dashboard?tab=account',
         ]);
+
+        $clientLabel = trim(($customer->mname ?: '') !== ''
+            ? (string) $customer->mname
+            : trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''))) ?: ($customer->email ?? 'Client');
+
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $customer->id,
+            ['customer_care', 'admin', 'sales_admin'],
+            'admin:profile-change:' . $changeRequest->id,
+            'Profile Change Pending Review',
+            "{$clientLabel} submitted profile change {$changeRequest->request_no}.",
+            'profile_change',
+            '/public/commerce-admin?tab=approvals',
+        );
 
         app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
 

@@ -483,86 +483,106 @@ class CommerceAdminController extends Controller
 
     public function notifications(Request $request)
     {
-        $this->resolveStaff($request);
-
+        $staff = $this->resolveStaff($request);
         $perPage = $request->integer('per_page', 50);
+        $isSales = $staff->hasRole('sales_admin');
 
-        $broadcastRows = CustomerNotification::query()
-            ->where('reference_key', 'like', 'broadcast:%')
-            ->select('reference_key')
-            ->selectRaw('MIN(id) as id')
-            ->selectRaw('MAX(title) as title')
-            ->selectRaw('MAX(body) as body')
-            ->selectRaw('MAX(created_at) as created_at')
-            ->groupBy('reference_key')
-            ->orderByDesc('created_at')
-            ->paginate($perPage);
+        // Web design quotations are Sales-only.
+        $clientAlerts = collect();
+        if ($isSales) {
+            $clientAlerts = $this->pendingWebDesignQuotationsQuery()
+                ->with(['customer:id,fname,lname,email,mname,owner_id', 'items'])
+                ->latest('transacted_at')
+                ->latest('id')
+                ->limit($perPage)
+                ->get()
+                ->map(fn (SalesTransaction $row) => $this->mapWebDesignQuotationAlert($row))
+                ->values();
+        }
 
-        $clientAlerts = $this->pendingWebDesignQuotationsQuery()
-            ->with(['customer:id,fname,lname,email,mname', 'items'])
-            ->latest('transacted_at')
-            ->latest('id')
+        // Staff inbox copies for this signed-in user (quotations, proofs, tickets, profile changes).
+        $inboxAlerts = CustomerNotification::query()
+            ->where('customer_id', $staff->id)
+            ->where(function ($query) {
+                $query->where('reference_key', 'like', 'admin:%')
+                    ->orWhereIn('type', [
+                        'web_design_quotation',
+                        'payment_proof',
+                        'profile_change',
+                        'support_ticket',
+                    ]);
+            })
+            ->latest()
             ->limit($perPage)
             ->get()
-            ->map(fn (SalesTransaction $row) => $this->mapWebDesignQuotationAlert($row))
-            ->values();
+            ->map(function (CustomerNotification $row) {
+                $kind = match (true) {
+                    str_starts_with((string) $row->reference_key, 'admin:payment-proof:') => 'payment_proof',
+                    str_starts_with((string) $row->reference_key, 'admin:profile-change:') => 'profile_change',
+                    str_starts_with((string) $row->reference_key, 'admin:support-ticket:') => 'support_ticket',
+                    str_starts_with((string) $row->reference_key, 'admin:webdesign-quotation:') => 'web_design_quotation',
+                    default => (string) ($row->type ?: 'general'),
+                };
 
-        // Also surface staff inbox copies (in case Sales refreshes before TX list catches up).
-        $staffAlertKeys = $clientAlerts
-            ->pluck('id')
-            ->map(fn ($id) => 'admin:webdesign-quotation:' . $id)
-            ->all();
+                $status = match ($kind) {
+                    'payment_proof' => 'Pending Review',
+                    'profile_change' => 'Pending Review',
+                    'support_ticket' => 'Open',
+                    'web_design_quotation' => 'Needs Pricing',
+                    default => 'Unread',
+                };
 
-        $extraStaffAlerts = CustomerNotification::query()
-            ->where('reference_key', 'like', 'admin:webdesign-quotation:%')
-            ->when($staffAlertKeys, fn ($q) => $q->whereNotIn('reference_key', $staffAlertKeys))
-            ->select('reference_key')
-            ->selectRaw('MIN(id) as id')
-            ->selectRaw('MAX(title) as title')
-            ->selectRaw('MAX(body) as body')
-            ->selectRaw('MAX(created_at) as created_at')
-            ->groupBy('reference_key')
-            ->orderByDesc('created_at')
-            ->limit($perPage)
-            ->get()
-            ->map(function ($row) {
-                $txnId = (int) str_replace('admin:webdesign-quotation:', '', (string) $row->reference_key);
+                $actionUrl = $row->action_url ?: match ($kind) {
+                    'payment_proof', 'profile_change' => '/public/commerce-admin?tab=approvals',
+                    'support_ticket' => '/public/commerce-admin?tab=helpdesk',
+                    default => '/public/commerce-admin?tab=orders',
+                };
 
                 return [
-                    'id' => $txnId > 0 ? $txnId : (int) $row->id,
-                    'kind' => 'web_design_quotation',
-                    'title' => $row->title ?: 'Web Design Quotation Request',
+                    'id' => (int) $row->id,
+                    'kind' => $kind,
+                    'title' => $row->title,
                     'desc' => $row->body,
                     'date' => $this->formatAppDateTime($row->created_at),
-                    'audience' => 'Client',
+                    'audience' => 'Assigned / Role Inbox',
                     'email' => null,
                     'transactionNo' => null,
-                    'status' => 'Needs Pricing',
-                    'actionUrl' => '/public/commerce-admin?tab=orders',
+                    'status' => $status,
+                    'actionUrl' => $actionUrl,
+                    'unread' => $row->read_at === null,
                 ];
-            });
+            })
+            // Hide web design quotation inbox items from non-Sales staff.
+            ->filter(function (array $row) use ($isSales) {
+                if (($row['kind'] ?? '') === 'web_design_quotation') {
+                    return $isSales;
+                }
 
-        $clientAlerts = $clientAlerts->concat($extraStaffAlerts)->values();
+                return true;
+            })
+            ->values();
+
+        // Deduplicate by title+desc+kind while preferring live quotation rows.
+        $merged = $clientAlerts
+            ->concat($inboxAlerts)
+            ->unique(function (array $row) {
+                return ($row['kind'] ?? '') . '|' . ($row['title'] ?? '') . '|' . ($row['desc'] ?? '');
+            })
+            ->values()
+            ->take($perPage);
 
         return response()->json([
             'data' => [
-                'clientAlerts' => $clientAlerts,
-                'broadcasts' => $broadcastRows->getCollection()->map(fn ($row) => [
-                    'id' => (int) $row->id,
-                    'title' => $row->title,
-                    'desc' => $row->body,
-                    'date' => optional($row->created_at)->format('Y-m-d'),
-                    'audience' => 'All Client Portals',
-                    'status' => 'Sent',
-                    'kind' => 'broadcast',
-                ])->values(),
+                'clientAlerts' => $merged,
+                'broadcasts' => [],
             ],
             'meta' => [
-                'pendingQuotations' => $clientAlerts->count(),
+                'pendingQuotations' => $merged->where('kind', 'web_design_quotation')->count(),
+                'inboxCount' => $inboxAlerts->count(),
                 'broadcasts' => [
-                    'current_page' => $broadcastRows->currentPage(),
-                    'last_page' => $broadcastRows->lastPage(),
-                    'total' => $broadcastRows->total(),
+                    'current_page' => 1,
+                    'last_page' => 1,
+                    'total' => 0,
                 ],
             ],
         ]);

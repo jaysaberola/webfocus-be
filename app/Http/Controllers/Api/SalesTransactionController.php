@@ -8,6 +8,7 @@ use App\Models\CustomerNotification;
 use App\Models\SalesTransaction;
 use App\Models\Setting;
 use App\Models\User;
+use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
 use Carbon\Carbon;
@@ -472,33 +473,24 @@ class SalesTransactionController extends Controller
                 'body' => 'Your web design quotation request '
                     . $transaction->transaction_no
                     . ($itemNames ? " ({$itemNames})" : '')
-                    . ' was sent to Sales / Customer Care for pricing.',
+                    . ' was sent to Sales for pricing.',
                 'type' => 'general',
                 'action_url' => '/public/dashboard?tab=orders',
             ]);
         }
 
-        $staffIds = User::role(['sales_admin', 'admin', 'customer_care', 'finance_admin'])
-            ->where('is_active', true)
-            ->pluck('id');
-
-        $referenceKey = 'admin:webdesign-quotation:' . $transaction->id;
-        foreach ($staffIds as $staffId) {
-            CustomerNotification::query()->updateOrCreate(
-                [
-                    'customer_id' => $staffId,
-                    'reference_key' => $referenceKey,
-                ],
-                [
-                    'title' => 'Web Design Quotation Request',
-                    'body' => "{$clientLabel} submitted a Pending Quotation checkout"
-                        . ($itemNames ? " for {$itemNames}" : '')
-                        . " ({$transaction->transaction_no}). Set the package price in Orders.",
-                    'type' => 'web_design_quotation',
-                    'action_url' => '/public/commerce-admin?tab=orders',
-                ]
-            );
-        }
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            $transaction->customer_id ? (int) $transaction->customer_id : null,
+            ['sales_admin'],
+            'admin:webdesign-quotation:' . $transaction->id,
+            'Web Design Quotation Request',
+            "{$clientLabel} submitted a Pending Quotation checkout"
+                . ($itemNames ? " for {$itemNames}" : '')
+                . " ({$transaction->transaction_no}). Set the package price in Orders.",
+            'web_design_quotation',
+            '/public/commerce-admin?tab=orders',
+            false,
+        );
 
         $to = Setting::query()->value('email') ?: 'customercare@webfocus.ph';
 
