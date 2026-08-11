@@ -92,6 +92,7 @@ class CustomerController extends Controller
                     ] : null,
                     'owner_name' => $ownerName,
                     'client_classification' => $customer->client_classification,
+                    'client_type' => $customer->client_type,
                     'billing_in_charge' => $customer->billing_in_charge,
                     'contact_person' => $customer->contact_person,
                 ];
