@@ -465,9 +465,30 @@ class CommerceAdminController extends Controller
         $this->resolveStaff($request);
 
         $rows = CustomerService::query()
-            ->with(['customer:id,fname,lname,email', 'salesTransaction'])
+            ->with(['customer:id,fname,lname,email,mname', 'salesTransaction'])
             ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->filled('plan'), function ($q) use ($request) {
+                $plan = trim((string) $request->input('plan'));
+                $q->where(function ($qq) use ($plan) {
+                    $qq->where('plan', 'like', "%{$plan}%")
+                        ->orWhere('title', 'like', "%{$plan}%");
+                });
+            })
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $term = trim((string) $request->input('search'));
+                $q->where(function ($qq) use ($term) {
+                    $qq->where('plan', 'like', "%{$term}%")
+                        ->orWhere('title', 'like', "%{$term}%")
+                        ->orWhere('category', 'like', "%{$term}%")
+                        ->orWhereHas('customer', function ($customerQuery) use ($term) {
+                            $customerQuery->where('fname', 'like', "%{$term}%")
+                                ->orWhere('lname', 'like', "%{$term}%")
+                                ->orWhere('email', 'like', "%{$term}%")
+                                ->orWhere('mname', 'like', "%{$term}%");
+                        });
+                });
+            })
             ->latest()
             ->paginate($request->integer('per_page', 20));
 
@@ -799,11 +820,13 @@ class CommerceAdminController extends Controller
 
         return [
             'id' => $service->id,
+            'customerId' => $customer?->id,
             'title' => $service->title,
             'category' => $service->category,
             'plan' => $service->plan,
             'status' => $service->status,
             'client' => $customer?->full_name ?? 'Customer',
+            'company' => $customer?->mname,
             'email' => $customer?->email,
             'renewLabel' => $service->renew_label,
             'renewAt' => optional($service->renew_at)->format('Y-m-d'),

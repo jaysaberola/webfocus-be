@@ -81,7 +81,7 @@ class PermissionSeeder extends Seeder
             'commerce_approvals.view',
             'commerce_approvals.manage',
 
-            // Commerce — Managed Services
+            // CMS — Managed Services (catalog / discounts)
             'commerce_managed.view',
             'commerce_managed.manage',
 
