@@ -91,6 +91,9 @@ class CustomerController extends Controller
                         'email' => $owner->email,
                     ] : null,
                     'owner_name' => $ownerName,
+                    'client_classification' => $customer->client_classification,
+                    'billing_in_charge' => $customer->billing_in_charge,
+                    'contact_person' => $customer->contact_person,
                 ];
             });
 
@@ -107,45 +110,53 @@ class CustomerController extends Controller
     public function store(Request $request)
     {
         $this->ensureCustomerRole();
+        $this->normalizeClientRequest($request);
 
-        $validated = $request->validate([
-            'fname' => ['required', 'string', 'max:255'],
-            'lname' => ['required', 'string', 'max:255'],
-            'company' => ['required', 'string', 'max:255'],
-            'email' => ['required', 'email', 'unique:users,email'],
-            'address_street' => ['required', 'string', 'max:500'],
-            'mobile' => ['required', 'string', 'regex:/^\d{9}$/'],
-            'phone' => ['nullable', 'string', 'max:50'],
-            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-            'services' => ['required', 'array', 'min:1'],
-            'services.*' => ['required', 'string', 'max:255'],
-            'addons' => ['nullable', 'array'],
-            'addons.*' => ['string', 'max:255'],
-        ]);
+        $validated = $request->validate(array_merge(
+            $this->clientProfileRules(true),
+            [
+                'services' => ['nullable', 'array'],
+                'services.*' => ['required', 'string', 'max:255'],
+                'addons' => ['nullable', 'array'],
+                'addons.*' => ['string', 'max:255'],
+                'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+            ]
+        ));
+
+        [$fname, $lname] = $this->resolveContactNames($validated);
 
         $avatarPath = null;
         if ($request->hasFile('avatar')) {
             $avatarPath = $request->file('avatar')->store('avatars', 'public');
         }
 
-        $customer = User::create([
-            'fname' => $validated['fname'],
-            'lname' => $validated['lname'],
-            'mname' => $validated['company'],
-            'email' => $validated['email'],
-            'mobile' => '+63' . $validated['mobile'],
-            'phone' => $validated['phone'] ?? null,
-            'address_street' => $validated['address_street'],
-            'avatar' => $avatarPath,
-            'password' => Hash::make('password'),
-            'is_active' => true,
-        ]);
+        $filePaths = $this->storeClientDocuments($request);
+
+        $customer = User::create(array_merge(
+            [
+                'fname' => $fname,
+                'lname' => $lname,
+                'mname' => $validated['company'],
+                'email' => $validated['email'],
+                'mobile' => isset($validated['mobile']) && $validated['mobile'] !== ''
+                    ? '+63' . $validated['mobile']
+                    : null,
+                'phone' => $validated['phone'] ?? null,
+                'address_street' => $validated['address_street'] ?? null,
+                'avatar' => $avatarPath,
+                'password' => Hash::make('password'),
+                'is_active' => true,
+                'owner_id' => $validated['owner_id'] ?? null,
+            ],
+            $this->clientProfileAttributes($validated),
+            $filePaths
+        ));
 
         $customer->assignRole(self::ROLE);
 
         $renewAt = now()->addYear();
 
-        foreach ($validated['services'] as $serviceTitle) {
+        foreach ($validated['services'] ?? [] as $serviceTitle) {
             CustomerService::create([
                 'customer_id' => $customer->id,
                 'title' => $serviceTitle,
@@ -234,7 +245,7 @@ class CustomerController extends Controller
             ]);
 
         return response()->json([
-            'data' => [
+            'data' => array_merge([
                 'id' => $customer->id,
                 'fname' => $customer->fname,
                 'lname' => $customer->lname,
@@ -243,14 +254,19 @@ class CustomerController extends Controller
                 'mobile' => $customer->mobile,
                 'phone' => $customer->phone,
                 'address_street' => $customer->address_street,
+                'address_city' => $customer->address_city,
+                'address_province' => $customer->address_province,
+                'address_zip' => $customer->address_zip,
+                'address_country' => $customer->address_country,
                 'avatar' => $customer->avatar,
                 'type' => 'Customer',
                 'role' => self::ROLE,
                 'created_at' => $customer->created_at,
                 'date_registered' => optional($customer->created_at)->format('F d, Y'),
                 'is_active' => $customer->is_active,
+                'owner_id' => $customer->owner_id,
                 'audits' => $activityLogs,
-            ],
+            ], $this->clientProfilePayload($customer)),
         ]);
     }
 
@@ -262,21 +278,21 @@ class CustomerController extends Controller
             $request->setMethod('PUT');
         }
 
-        $validated = $request->validate([
-            'fname' => ['required', 'string', 'max:255'],
-            'lname' => ['required', 'string', 'max:255'],
-            'company' => ['nullable', 'string', 'max:255'],
-            'email' => ['required', 'email', Rule::unique('users')->ignore($customer->id)],
-            'address_street' => ['nullable', 'string', 'max:500'],
-            'mobile' => ['nullable', 'string', 'regex:/^\d{9}$/'],
-            'phone' => ['nullable', 'string', 'max:50'],
-            'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-            'is_active' => ['sometimes', 'boolean'],
-            'services' => ['nullable', 'array'],
-            'services.*' => ['string', 'max:255'],
-            'addons' => ['nullable', 'array'],
-            'addons.*' => ['string', 'max:255'],
-        ]);
+        $this->normalizeClientRequest($request);
+
+        $validated = $request->validate(array_merge(
+            $this->clientProfileRules(false, $customer->id),
+            [
+                'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
+                'is_active' => ['sometimes', 'boolean'],
+                'services' => ['nullable', 'array'],
+                'services.*' => ['string', 'max:255'],
+                'addons' => ['nullable', 'array'],
+                'addons.*' => ['string', 'max:255'],
+            ]
+        ));
+
+        [$fname, $lname] = $this->resolveContactNames($validated, $customer);
 
         $avatarPath = $customer->avatar;
         if ($request->hasFile('avatar')) {
@@ -286,19 +302,30 @@ class CustomerController extends Controller
             $avatarPath = $request->file('avatar')->store('avatars', 'public');
         }
 
-        $customer->update([
-            'fname' => $validated['fname'],
-            'lname' => $validated['lname'],
-            'mname' => $validated['company'] ?? $customer->mname,
-            'email' => $validated['email'],
-            'mobile' => isset($validated['mobile']) ? '+63' . $validated['mobile'] : $customer->mobile,
-            'phone' => $validated['phone'] ?? $customer->phone,
-            'address_street' => $validated['address_street'] ?? $customer->address_street,
-            'avatar' => $avatarPath,
-            'is_active' => array_key_exists('is_active', $validated)
-                ? (bool) $validated['is_active']
-                : $customer->is_active,
-        ]);
+        $filePaths = $this->storeClientDocuments($request, $customer);
+
+        $customer->update(array_merge(
+            [
+                'fname' => $fname,
+                'lname' => $lname,
+                'mname' => $validated['company'] ?? $customer->mname,
+                'email' => $validated['email'],
+                'mobile' => array_key_exists('mobile', $validated) && $validated['mobile'] !== null && $validated['mobile'] !== ''
+                    ? '+63' . $validated['mobile']
+                    : $customer->mobile,
+                'phone' => $validated['phone'] ?? $customer->phone,
+                'address_street' => $validated['address_street'] ?? $customer->address_street,
+                'avatar' => $avatarPath,
+                'is_active' => array_key_exists('is_active', $validated)
+                    ? (bool) $validated['is_active']
+                    : $customer->is_active,
+                'owner_id' => array_key_exists('owner_id', $validated)
+                    ? $validated['owner_id']
+                    : $customer->owner_id,
+            ],
+            $this->clientProfileAttributes($validated),
+            $filePaths
+        ));
 
         $customer->syncRoles([self::ROLE]);
 
@@ -352,6 +379,23 @@ class CustomerController extends Controller
         ]);
     }
 
+    private function normalizeClientRequest(Request $request): void
+    {
+        if ($request->has('owner_id') && ($request->input('owner_id') === '' || $request->input('owner_id') === 'null')) {
+            $request->merge(['owner_id' => null]);
+        }
+
+        if ($request->has('mobile')) {
+            $digits = preg_replace('/\D+/', '', (string) $request->input('mobile'));
+            if (str_starts_with((string) $digits, '63') && strlen((string) $digits) >= 11) {
+                $digits = substr((string) $digits, 2, 9);
+            } elseif (strlen((string) $digits) > 9) {
+                $digits = substr((string) $digits, -9);
+            }
+            $request->merge(['mobile' => $digits ?: null]);
+        }
+    }
+
     private function syncCustomerServices(User $customer, array $services, array $addons): void
     {
         $desired = collect($services)
@@ -403,5 +447,195 @@ class CustomerController extends Controller
 
             $service->update(['status' => 'Expired']);
         }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function clientProfileRules(bool $creating, ?int $ignoreUserId = null): array
+    {
+        $emailRule = $creating
+            ? ['required', 'email', 'unique:users,email']
+            : ['required', 'email', Rule::unique('users')->ignore($ignoreUserId)];
+
+        return [
+            'fname' => [$creating ? 'nullable' : 'nullable', 'string', 'max:255'],
+            'lname' => ['nullable', 'string', 'max:255'],
+            'company' => [$creating ? 'required' : 'nullable', 'string', 'max:255'],
+            'email' => $emailRule,
+            'address_street' => ['nullable', 'string', 'max:500'],
+            'address_city' => ['nullable', 'string', 'max:255'],
+            'address_province' => ['nullable', 'string', 'max:255'],
+            'address_zip' => ['nullable', 'string', 'max:50'],
+            'address_country' => ['nullable', 'string', 'max:255'],
+            'shipping_street' => ['nullable', 'string', 'max:500'],
+            'shipping_city' => ['nullable', 'string', 'max:255'],
+            'shipping_province' => ['nullable', 'string', 'max:255'],
+            'shipping_zip' => ['nullable', 'string', 'max:50'],
+            'shipping_country' => ['nullable', 'string', 'max:255'],
+            'mobile' => ['nullable', 'string', 'regex:/^\d{9}$/'],
+            'phone' => ['nullable', 'string', 'max:50'],
+            'owner_id' => ['nullable', 'integer', 'exists:users,id'],
+            'industry' => ['nullable', 'string', 'max:255'],
+            'tax_classification' => ['nullable', 'string', 'max:255'],
+            'tin_number' => ['nullable', 'string', 'max:100'],
+            'other_numbers' => ['nullable', 'string', 'max:255'],
+            'currency' => ['nullable', 'string', 'max:10'],
+            'workdrive_folder_url' => ['nullable', 'string', 'max:500'],
+            'workdrive_folder_id' => ['nullable', 'string', 'max:255'],
+            'client_classification' => ['nullable', 'string', 'max:100'],
+            'client_type' => ['nullable', 'string', 'max:100'],
+            'contact_person' => ['nullable', 'string', 'max:255'],
+            'website' => ['nullable', 'string', 'max:255'],
+            'ownership' => ['nullable', 'string', 'max:100'],
+            'billing_in_charge' => ['nullable', 'string', 'max:255'],
+            'exchange_rate' => ['nullable', 'numeric', 'min:0'],
+            'bir_certificate' => ['nullable', 'file', 'max:5120'],
+            'business_permit' => ['nullable', 'file', 'max:5120'],
+            'sec_dti_registration' => ['nullable', 'file', 'max:5120'],
+            'valid_id_signatories' => ['nullable', 'file', 'max:5120'],
+            'gen_info_sheet' => ['nullable', 'file', 'max:5120'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     * @return array{0: string, 1: string}
+     */
+    private function resolveContactNames(array $validated, ?User $existing = null): array
+    {
+        $contact = trim((string) ($validated['contact_person'] ?? ''));
+        if ($contact !== '') {
+            $parts = preg_split('/\s+/', $contact, 2) ?: [];
+            $fname = $parts[0] ?? 'Client';
+            $lname = $parts[1] ?? ($validated['company'] ?? 'Account');
+
+            return [$fname, $lname];
+        }
+
+        $fname = trim((string) ($validated['fname'] ?? $existing?->fname ?? ''));
+        $lname = trim((string) ($validated['lname'] ?? $existing?->lname ?? ''));
+
+        if ($fname === '') {
+            $fname = 'Client';
+        }
+        if ($lname === '') {
+            $lname = (string) ($validated['company'] ?? $existing?->mname ?? 'Account');
+        }
+
+        return [$fname, $lname];
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     * @return array<string, mixed>
+     */
+    private function clientProfileAttributes(array $validated): array
+    {
+        $keys = [
+            'industry',
+            'tax_classification',
+            'tin_number',
+            'other_numbers',
+            'currency',
+            'workdrive_folder_url',
+            'workdrive_folder_id',
+            'client_classification',
+            'client_type',
+            'contact_person',
+            'website',
+            'ownership',
+            'billing_in_charge',
+            'exchange_rate',
+            'address_city',
+            'address_province',
+            'address_zip',
+            'address_country',
+            'shipping_street',
+            'shipping_city',
+            'shipping_province',
+            'shipping_zip',
+            'shipping_country',
+        ];
+
+        $attrs = [];
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $validated)) {
+                $attrs[$key] = $validated[$key];
+            }
+        }
+
+        if (!array_key_exists('currency', $attrs) || $attrs['currency'] === null || $attrs['currency'] === '') {
+            $attrs['currency'] = 'PHP';
+        }
+
+        if (!array_key_exists('exchange_rate', $attrs) || $attrs['exchange_rate'] === null || $attrs['exchange_rate'] === '') {
+            $attrs['exchange_rate'] = 1;
+        }
+
+        return $attrs;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function clientProfilePayload(User $customer): array
+    {
+        return [
+            'industry' => $customer->industry,
+            'tax_classification' => $customer->tax_classification,
+            'tin_number' => $customer->tin_number,
+            'other_numbers' => $customer->other_numbers,
+            'currency' => $customer->currency ?: 'PHP',
+            'workdrive_folder_url' => $customer->workdrive_folder_url,
+            'workdrive_folder_id' => $customer->workdrive_folder_id,
+            'client_classification' => $customer->client_classification,
+            'client_type' => $customer->client_type,
+            'contact_person' => $customer->contact_person,
+            'website' => $customer->website,
+            'ownership' => $customer->ownership,
+            'billing_in_charge' => $customer->billing_in_charge,
+            'exchange_rate' => $customer->exchange_rate,
+            'shipping_street' => $customer->shipping_street,
+            'shipping_city' => $customer->shipping_city,
+            'shipping_province' => $customer->shipping_province,
+            'shipping_zip' => $customer->shipping_zip,
+            'shipping_country' => $customer->shipping_country,
+            'bir_certificate' => $customer->bir_certificate,
+            'business_permit' => $customer->business_permit,
+            'sec_dti_registration' => $customer->sec_dti_registration,
+            'valid_id_signatories' => $customer->valid_id_signatories,
+            'gen_info_sheet' => $customer->gen_info_sheet,
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function storeClientDocuments(Request $request, ?User $existing = null): array
+    {
+        $fields = [
+            'bir_certificate',
+            'business_permit',
+            'sec_dti_registration',
+            'valid_id_signatories',
+            'gen_info_sheet',
+        ];
+
+        $paths = [];
+        foreach ($fields as $field) {
+            if (!$request->hasFile($field)) {
+                continue;
+            }
+
+            $previous = $existing?->{$field};
+            if ($previous && Storage::disk('public')->exists($previous)) {
+                Storage::disk('public')->delete($previous);
+            }
+
+            $paths[$field] = $request->file($field)->store('client-documents', 'public');
+        }
+
+        return $paths;
     }
 }
