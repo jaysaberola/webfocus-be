@@ -817,6 +817,16 @@ class CommerceAdminController extends Controller
     private function mapAdminService(CustomerService $service): array
     {
         $customer = $service->customer;
+        $subjectDomain = null;
+        foreach ([trim((string) ($service->title ?? '')), trim((string) ($service->plan ?? ''))] as $candidate) {
+            if (TransactionLabelResolver::looksLikeDomain($candidate)) {
+                $subjectDomain = $candidate;
+                break;
+            }
+        }
+        if (!$subjectDomain && filled($customer?->website)) {
+            $subjectDomain = $customer->website;
+        }
 
         return [
             'id' => $service->id,
@@ -824,6 +834,9 @@ class CommerceAdminController extends Controller
             'title' => $service->title,
             'category' => $service->category,
             'plan' => $service->plan,
+            'serviceName' => $service->category ?: $service->title,
+            'planName' => $service->plan,
+            'subjectDomain' => $subjectDomain,
             'status' => $service->status,
             'client' => $customer?->full_name ?? 'Customer',
             'company' => $customer?->mname,

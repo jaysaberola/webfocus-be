@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
 use App\Models\User;
+use App\Support\TransactionLabelResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -30,7 +31,11 @@ class CustomerController extends Controller
 
         $perPage = $request->integer('per_page', 10);
 
-        $customers = User::with(['roles', 'owner:id,fname,lname,email'])
+        $customers = User::with([
+                'roles',
+                'owner:id,fname,lname,email',
+                'customerServices' => fn ($q) => $q->where('status', 'Active')->orderBy('id'),
+            ])
             ->withCount([
                 'customerServices as active_services_count' => fn ($q) => $q->where('status', 'Active'),
             ])
@@ -39,7 +44,9 @@ class CustomerController extends Controller
                 $q->where(function ($qq) use ($request) {
                     $qq->where('fname', 'like', "%{$request->search}%")
                        ->orWhere('lname', 'like', "%{$request->search}%")
-                       ->orWhere('email', 'like', "%{$request->search}%");
+                       ->orWhere('email', 'like', "%{$request->search}%")
+                       ->orWhere('mname', 'like', "%{$request->search}%")
+                       ->orWhere('website', 'like', "%{$request->search}%");
                 });
             })
             ->when($request->filled('name'), function ($q) use ($request) {
@@ -71,6 +78,7 @@ class CustomerController extends Controller
                 $ownerName = $owner
                     ? (trim(($owner->fname ?? '') . ' ' . ($owner->lname ?? '')) ?: ($owner->email ?? null))
                     : null;
+                $serviceSummary = $this->summarizeCustomerServices($customer);
 
                 return [
                     'id' => $customer->id,
@@ -95,6 +103,10 @@ class CustomerController extends Controller
                     'client_type' => $customer->client_type,
                     'billing_in_charge' => $customer->billing_in_charge,
                     'contact_person' => $customer->contact_person,
+                    'website' => $customer->website,
+                    'service_name' => $serviceSummary['service_name'],
+                    'plan_name' => $serviceSummary['plan_name'],
+                    'subject_domain' => $serviceSummary['subject_domain'],
                 ];
             });
 
@@ -223,6 +235,61 @@ class CustomerController extends Controller
         }
 
         return 'Hosting';
+    }
+
+    /**
+     * @return array{service_name: ?string, plan_name: ?string, subject_domain: ?string}
+     */
+    private function summarizeCustomerServices(User $customer): array
+    {
+        $services = $customer->customerServices ?? collect();
+
+        $serviceNames = $services
+            ->map(function (CustomerService $service) {
+                $category = trim((string) ($service->category ?? ''));
+                if ($category !== '' && strcasecmp($category, 'Add-on') !== 0) {
+                    return $category;
+                }
+
+                return trim((string) ($service->title ?? ''));
+            })
+            ->filter()
+            ->unique()
+            ->values();
+
+        $planNames = $services
+            ->map(fn (CustomerService $service) => trim((string) ($service->plan ?? $service->title ?? '')))
+            ->filter()
+            ->unique()
+            ->values();
+
+        $domains = $services
+            ->flatMap(function (CustomerService $service) {
+                return [
+                    trim((string) ($service->title ?? '')),
+                    trim((string) ($service->plan ?? '')),
+                ];
+            })
+            ->filter(fn ($value) => TransactionLabelResolver::looksLikeDomain($value))
+            ->unique()
+            ->values();
+
+        $website = trim((string) ($customer->website ?? ''));
+        if ($website !== '') {
+            $cleanWebsite = preg_replace('/^https?:\/\//i', '', $website) ?? $website;
+            $cleanWebsite = preg_replace('/^www\./i', '', $cleanWebsite) ?? $cleanWebsite;
+            $cleanWebsite = explode('/', $cleanWebsite)[0] ?? '';
+            $cleanWebsite = trim($cleanWebsite);
+            if ($cleanWebsite !== '') {
+                $domains = $domains->push($cleanWebsite)->unique()->values();
+            }
+        }
+
+        return [
+            'service_name' => $serviceNames->isEmpty() ? null : $serviceNames->implode(', '),
+            'plan_name' => $planNames->isEmpty() ? null : $planNames->implode(', '),
+            'subject_domain' => $domains->isEmpty() ? null : $domains->implode(', '),
+        ];
     }
 
     public function show(User $customer)
