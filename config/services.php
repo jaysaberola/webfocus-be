@@ -35,21 +35,33 @@ return [
         'key' => env('OPENAI_API_KEY'),
     ],
 
-      'domain_lookup' => [
-    'providers' => env('DOMAIN_AVAILABILITY_PROVIDERS', 'enom,webnic'),
+
+'enom' => [
+    'url' => env('ENOM_API_URL'),
+    'uid' => env('ENOM_UID'),
+    'password' => env('ENOM_PASSWORD'),
+    'currency' => env('ENOM_CURRENCY', 'USD'),
 ],
 
-'webnic' => [
-    'base_url'   => env('WEBNIC_API_URL', 'https://api.webnic.cc'),
-    'url'        => env('WEBNIC_API_URL', 'https://api.webnic.cc'),
-    'token_url'  => env('WEBNIC_TOKEN_URL', 'https://api.webnic.cc/reseller/v2/api-user/token'),
+'domain_lookup' => [
+    'providers' => array_filter(
+        array_map('trim', explode(',', env(
+            'DOMAIN_AVAILABILITY_PROVIDERS',
+            'enom,webnic'
+        )))
+    ),
 
-    'username'   => env('WEBNIC_USERNAME', env('WEBNIC_API_KEY')),
-    'password'   => env('WEBNIC_PASSWORD'),
+    'price_markup_percent' => (float) env(
+        'DOMAIN_PRICE_MARKUP_PERCENT',
+        20
+    ),
+],
 
-    // Optional fallback if you still use old env names
-    'api_key'    => env('WEBNIC_API_KEY'),
-    'api_secret' => env('WEBNIC_API_SECRET'),
+'exchange_rate' => [
+    'url' => env(
+        'EXCHANGE_RATE_API_URL',
+        'https://open.er-api.com/v6/latest'
+    ),
 ],
 
 ];
