@@ -10,6 +10,7 @@ use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Support\ServiceCatalogLabelResolver;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
 use App\Services\CustomerPortalNotificationSync;
@@ -817,16 +818,15 @@ class CommerceAdminController extends Controller
     private function mapAdminService(CustomerService $service): array
     {
         $customer = $service->customer;
-        $subjectDomain = null;
-        foreach ([trim((string) ($service->title ?? '')), trim((string) ($service->plan ?? ''))] as $candidate) {
-            if (TransactionLabelResolver::looksLikeDomain($candidate)) {
-                $subjectDomain = $candidate;
-                break;
-            }
-        }
-        if (!$subjectDomain && filled($customer?->website)) {
-            $subjectDomain = $customer->website;
-        }
+        $labels = ServiceCatalogLabelResolver::describe(
+            $service->title,
+            $service->category,
+            $service->plan,
+            $customer?->website,
+        );
+        $subjectDomain = collect([$labels['subject'], $labels['domain']])
+            ->filter()
+            ->implode(' ');
 
         return [
             'id' => $service->id,
@@ -834,9 +834,12 @@ class CommerceAdminController extends Controller
             'title' => $service->title,
             'category' => $service->category,
             'plan' => $service->plan,
-            'serviceName' => $service->category ?: $service->title,
-            'planName' => $service->plan,
-            'subjectDomain' => $subjectDomain,
+            'serviceName' => $labels['service_name'] ?: ($service->category ?: $service->title),
+            'planName' => $labels['plan_name'] ?: $service->plan,
+            'subject' => $labels['subject'],
+            'productCategory' => $labels['product_category'],
+            'domain' => $labels['domain'],
+            'subjectDomain' => $subjectDomain !== '' ? $subjectDomain : null,
             'status' => $service->status,
             'client' => $customer?->full_name ?? 'Customer',
             'company' => $customer?->mname,

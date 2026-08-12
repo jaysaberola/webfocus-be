@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
 use App\Models\User;
-use App\Support\TransactionLabelResolver;
+use App\Support\ServiceCatalogLabelResolver;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -106,7 +106,11 @@ class CustomerController extends Controller
                     'website' => $customer->website,
                     'service_name' => $serviceSummary['service_name'],
                     'plan_name' => $serviceSummary['plan_name'],
+                    'subject' => $serviceSummary['subject'],
+                    'product_category' => $serviceSummary['product_category'],
+                    'domain' => $serviceSummary['domain'],
                     'subject_domain' => $serviceSummary['subject_domain'],
+                    'services' => $serviceSummary['services'],
                 ];
             });
 
@@ -238,57 +242,67 @@ class CustomerController extends Controller
     }
 
     /**
-     * @return array{service_name: ?string, plan_name: ?string, subject_domain: ?string}
+     * @return array{
+     *     service_name: ?string,
+     *     plan_name: ?string,
+     *     subject: ?string,
+     *     product_category: ?string,
+     *     domain: ?string,
+     *     subject_domain: ?string,
+     *     services: list<array<string, mixed>>
+     * }
      */
     private function summarizeCustomerServices(User $customer): array
     {
-        $services = $customer->customerServices ?? collect();
+        $website = trim((string) ($customer->website ?? ''));
+        $lines = collect($customer->customerServices ?? [])
+            ->map(function (CustomerService $service) use ($website) {
+                $labels = ServiceCatalogLabelResolver::describe(
+                    $service->title,
+                    $service->category,
+                    $service->plan,
+                    $website,
+                );
 
-        $serviceNames = $services
-            ->map(function (CustomerService $service) {
-                $category = trim((string) ($service->category ?? ''));
-                if ($category !== '' && strcasecmp($category, 'Add-on') !== 0) {
-                    return $category;
-                }
-
-                return trim((string) ($service->title ?? ''));
-            })
-            ->filter()
-            ->unique()
-            ->values();
-
-        $planNames = $services
-            ->map(fn (CustomerService $service) => trim((string) ($service->plan ?? $service->title ?? '')))
-            ->filter()
-            ->unique()
-            ->values();
-
-        $domains = $services
-            ->flatMap(function (CustomerService $service) {
                 return [
-                    trim((string) ($service->title ?? '')),
-                    trim((string) ($service->plan ?? '')),
+                    'id' => $service->id,
+                    'title' => $service->title,
+                    'category' => $service->category,
+                    'plan' => $service->plan,
+                    'status' => $service->status,
+                    'service_name' => $labels['service_name'],
+                    'plan_name' => $labels['plan_name'],
+                    'subject' => $labels['subject'],
+                    'product_category' => $labels['product_category'],
+                    'domain' => $labels['domain'],
                 ];
             })
-            ->filter(fn ($value) => TransactionLabelResolver::looksLikeDomain($value))
+            ->values();
+
+        $unique = fn (string $key) => $lines
+            ->pluck($key)
+            ->filter(fn ($value) => filled($value))
             ->unique()
             ->values();
 
-        $website = trim((string) ($customer->website ?? ''));
-        if ($website !== '') {
-            $cleanWebsite = preg_replace('/^https?:\/\//i', '', $website) ?? $website;
-            $cleanWebsite = preg_replace('/^www\./i', '', $cleanWebsite) ?? $cleanWebsite;
-            $cleanWebsite = explode('/', $cleanWebsite)[0] ?? '';
-            $cleanWebsite = trim($cleanWebsite);
-            if ($cleanWebsite !== '') {
-                $domains = $domains->push($cleanWebsite)->unique()->values();
-            }
-        }
+        $serviceNames = $unique('service_name');
+        $planNames = $unique('plan_name');
+        $subjects = $unique('subject');
+        $productCategories = $unique('product_category');
+        $domains = $unique('domain');
+
+        $subjectDomain = collect([$subjects->implode(', '), $domains->implode(', ')])
+            ->filter()
+            ->implode(' ');
 
         return [
             'service_name' => $serviceNames->isEmpty() ? null : $serviceNames->implode(', '),
             'plan_name' => $planNames->isEmpty() ? null : $planNames->implode(', '),
-            'subject_domain' => $domains->isEmpty() ? null : $domains->implode(', '),
+            'subject' => $subjects->isEmpty() ? null : $subjects->implode(', '),
+            'product_category' => $productCategories->isEmpty() ? null : $productCategories->implode(', '),
+            'domain' => $domains->isEmpty() ? null : $domains->implode(', '),
+            'subject_domain' => $subjectDomain !== '' ? $subjectDomain : null,
+            'services' => $lines->all(),
         ];
     }
 
