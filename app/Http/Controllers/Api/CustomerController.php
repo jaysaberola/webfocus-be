@@ -39,6 +39,7 @@ class CustomerController extends Controller
             ])
             ->withCount([
                 'customerServices as active_services_count' => fn ($q) => $q->where('status', 'Active'),
+                'salesTransactions as orders_count',
             ])
             ->role(self::ROLE)
             ->when($request->filled('search'), function ($q) use ($request) {
@@ -93,6 +94,7 @@ class CustomerController extends Controller
                     'date_registered' => optional($customer->created_at)->format('F d, Y'),
                     'status' => $customer->is_active ? 'Active' : 'Inactive',
                     'active_services_count' => (int) ($customer->active_services_count ?? 0),
+                    'orders_count' => (int) ($customer->orders_count ?? 0),
                     'owner_id' => $customer->owner_id,
                     'owner' => $owner ? [
                         'id' => $owner->id,

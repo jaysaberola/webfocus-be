@@ -103,4 +103,9 @@ class User extends Authenticatable implements AuditableContract
         return $this->hasMany(CustomerService::class, 'customer_id');
     }
 
+    public function salesTransactions()
+    {
+        return $this->hasMany(SalesTransaction::class, 'customer_id');
+    }
+
 }
