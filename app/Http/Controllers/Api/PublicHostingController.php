@@ -26,6 +26,7 @@ class PublicHostingController extends Controller
 
         $plans = $query
             ->orderBy('category_id')
+            ->orderBy('price')
             ->orderBy('name')
             ->get()
             ->map(fn (Service $service) => $this->formatPlan($service))
