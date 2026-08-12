@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
 use App\Models\User;
 use App\Support\ServiceCatalogLabelResolver;
+use App\Support\StorageUrl;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -311,20 +312,56 @@ class CustomerController extends Controller
         abort_unless($customer->hasRole(self::ROLE), 404);
 
         $activityLogs = DB::table('audits')
-            ->where('user_id', $customer->id)
-            ->orderByDesc('created_at')
+            ->leftJoin('users as actors', 'audits.user_id', '=', 'actors.id')
+            ->where(function ($query) use ($customer) {
+                $query->where(function ($auditable) use ($customer) {
+                    $auditable
+                        ->where('audits.auditable_id', $customer->id)
+                        ->where(function ($type) {
+                            $type->where('audits.auditable_type', User::class)
+                                ->orWhere('audits.auditable_type', 'App\\Models\\User')
+                                ->orWhere('audits.auditable_type', 'like', '%User');
+                        });
+                })->orWhere('audits.user_id', $customer->id);
+            })
+            ->orderByDesc('audits.created_at')
+            ->select([
+                'audits.id',
+                'audits.event',
+                'audits.auditable_type',
+                'audits.auditable_id',
+                'audits.old_values',
+                'audits.new_values',
+                'audits.ip_address',
+                'audits.user_agent',
+                'audits.user_id',
+                'audits.created_at',
+                'actors.fname as actor_fname',
+                'actors.lname as actor_lname',
+                'actors.email as actor_email',
+            ])
             ->get()
-            ->map(fn($audit) => [
-                'id' => $audit->id,
-                'event' => $audit->event,
-                'auditable_type' => class_basename($audit->auditable_type),
-                'auditable_id' => $audit->auditable_id,
-                'old_values' => json_decode($audit->old_values, true),
-                'new_values' => json_decode($audit->new_values, true),
-                'ip_address' => $audit->ip_address,
-                'user_agent' => $audit->user_agent,
-                'created_at' => $audit->created_at,
-            ]);
+            ->map(function ($audit) {
+                $actorName = trim(($audit->actor_fname ?? '') . ' ' . ($audit->actor_lname ?? ''));
+                if ($actorName === '') {
+                    $actorName = $audit->actor_email;
+                }
+
+                return [
+                    'id' => $audit->id,
+                    'event' => $audit->event,
+                    'auditable_type' => class_basename((string) $audit->auditable_type),
+                    'auditable_id' => $audit->auditable_id,
+                    'old_values' => json_decode($audit->old_values, true) ?: [],
+                    'new_values' => json_decode($audit->new_values, true) ?: [],
+                    'ip_address' => $audit->ip_address,
+                    'user_agent' => $audit->user_agent,
+                    'user_id' => $audit->user_id,
+                    'actor_name' => $actorName ?: null,
+                    'created_at' => $audit->created_at,
+                ];
+            })
+            ->values();
 
         return response()->json([
             'data' => array_merge([
@@ -688,6 +725,11 @@ class CustomerController extends Controller
             'sec_dti_registration' => $customer->sec_dti_registration,
             'valid_id_signatories' => $customer->valid_id_signatories,
             'gen_info_sheet' => $customer->gen_info_sheet,
+            'bir_certificate_url' => StorageUrl::publicAsset($customer->bir_certificate),
+            'business_permit_url' => StorageUrl::publicAsset($customer->business_permit),
+            'sec_dti_registration_url' => StorageUrl::publicAsset($customer->sec_dti_registration),
+            'valid_id_signatories_url' => StorageUrl::publicAsset($customer->valid_id_signatories),
+            'gen_info_sheet_url' => StorageUrl::publicAsset($customer->gen_info_sheet),
         ];
     }
 
