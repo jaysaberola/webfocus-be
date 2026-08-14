@@ -52,7 +52,7 @@ class SalesTransactionController extends Controller
             );
 
         return response()->json(
-            $query->latest('transacted_at')->latest('updated_at')->paginate($perPage)
+            $query->latest('transacted_at')->latest('id')->paginate($perPage)
         );
     }
 
