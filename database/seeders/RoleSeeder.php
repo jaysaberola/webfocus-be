@@ -83,6 +83,24 @@ class RoleSeeder extends Seeder
             'commerce_helpdesk.update',
         ];
 
+        $commerceBillingInCharge = [
+            'dashboard.view',
+            'commerce_dashboard.view',
+            'customers.manage',
+            'sales_transactions.view',
+            'sales_transactions.manage',
+            'commerce_approvals.view',
+            'commerce_approvals.manage',
+            'commerce_managed.view',
+            'commerce_managed.manage',
+            'coupons.manage',
+            'commerce_notifications.view',
+            'commerce_notifications.manage',
+            'commerce_helpdesk.view',
+            'commerce_helpdesk.create',
+            'commerce_helpdesk.update',
+        ];
+
         $admin = Role::firstOrCreate(
             ['name' => 'admin', 'guard_name' => 'sanctum'],
             ['description' => 'Super Admin']
@@ -122,6 +140,14 @@ class RoleSeeder extends Seeder
         $technicalSupport->description = 'Technical Support';
         $technicalSupport->save();
         $technicalSupport->syncPermissions($commerceTechnicalSupport);
+
+        $billingInCharge = Role::firstOrCreate(
+            ['name' => 'billing_in_charge', 'guard_name' => 'sanctum'],
+            ['description' => 'Billing-in-Charge']
+        );
+        $billingInCharge->description = 'Billing-in-Charge';
+        $billingInCharge->save();
+        $billingInCharge->syncPermissions($commerceBillingInCharge);
 
         $editor = Role::firstOrCreate(
             ['name' => 'editor', 'guard_name' => 'sanctum'],

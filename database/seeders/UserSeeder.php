@@ -17,6 +17,7 @@ class UserSeeder extends Seeder
         $salesAdminRole = Role::where('name', 'sales_admin')->where('guard_name', 'sanctum')->firstOrFail();
         $technicalSupportRole = Role::where('name', 'technical_support')->where('guard_name', 'sanctum')->firstOrFail();
         $customerCareRole = Role::where('name', 'customer_care')->where('guard_name', 'sanctum')->firstOrFail();
+        $billingInChargeRole = Role::where('name', 'billing_in_charge')->where('guard_name', 'sanctum')->firstOrFail();
         $marketingRole = Role::where('name', 'marketing')->where('guard_name', 'sanctum')->firstOrFail();
 
         $defaultPassword = Hash::make('password');
@@ -86,6 +87,51 @@ class UserSeeder extends Seeder
             ]
         );
         $customerCare->syncRoles([$customerCareRole]);
+
+        $billingInCharge = User::firstOrCreate(
+            ['email' => 'billing@webfocus.ph'],
+            [
+                'fname' => 'Billing',
+                'lname' => 'In Charge',
+                'password' => $defaultPassword,
+                'is_active' => true,
+            ]
+        );
+        $billingInCharge->syncRoles([$billingInChargeRole]);
+
+        $billingInChargePeople = [
+            ['email' => 'girlie.tabelon@webfocus.ph', 'fname' => 'Girlie', 'lname' => 'Tabelon'],
+            ['email' => 'john.albert.fernandez@webfocus.ph', 'fname' => 'John Albert', 'lname' => 'Fernandez'],
+            ['email' => 'king.philip.labado@webfocus.ph', 'fname' => 'King Philip', 'lname' => 'Labado'],
+            ['email' => 'neriza.sulit@webfocus.ph', 'fname' => 'Neriza', 'lname' => 'Sulit'],
+            ['email' => 'tehn-ten.guerzo@webfocus.ph', 'fname' => 'Tehn-Ten', 'lname' => 'Guerzo'],
+        ];
+
+        foreach ($billingInChargePeople as $person) {
+            $user = User::query()
+                ->where('email', $person['email'])
+                ->orWhere(function ($query) use ($person) {
+                    $query->where('fname', $person['fname'])->where('lname', $person['lname']);
+                })
+                ->first();
+
+            if (!$user) {
+                $user = User::create([
+                    'email' => $person['email'],
+                    'fname' => $person['fname'],
+                    'lname' => $person['lname'],
+                    'password' => $defaultPassword,
+                    'is_active' => true,
+                ]);
+            } else {
+                $user->fname = $person['fname'];
+                $user->lname = $person['lname'];
+                $user->is_active = true;
+                $user->save();
+            }
+
+            $user->assignRole($billingInChargeRole);
+        }
 
         $marketing = User::firstOrCreate(
             ['email' => 'marketing@webfocus.ph'],

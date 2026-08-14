@@ -49,6 +49,7 @@ class CommerceAdminController extends Controller
                 'name' => trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')) ?: ($user->email ?? 'User'),
                 'email' => $user->email,
                 'role' => $user->getRoleNames()->first(),
+                'roles' => $user->getRoleNames()->values()->all(),
             ])
             ->values();
 
