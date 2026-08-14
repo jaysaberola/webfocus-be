@@ -868,6 +868,7 @@ class CommerceAdminController extends Controller
 
         return [
             'id' => (string) $row->id,
+            'customerId' => $row->customer_id,
             'service' => $row->title,
             'company' => $row->customer?->full_name ?? 'Customer',
             'expiryDate' => optional($row->renew_at)->format('Y-m-d'),

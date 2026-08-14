@@ -273,6 +273,7 @@ class CustomerController extends Controller
                     'category' => $service->category,
                     'plan' => $service->plan,
                     'status' => $service->status,
+                    'renew_at' => optional($service->renew_at)->toIso8601String(),
                     'service_name' => $labels['service_name'],
                     'plan_name' => $labels['plan_name'],
                     'subject' => $labels['subject'],
