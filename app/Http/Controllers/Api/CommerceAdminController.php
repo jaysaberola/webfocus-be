@@ -138,7 +138,8 @@ class CommerceAdminController extends Controller
         $newOrders = SalesTransaction::query()
             ->with(['customer:id,fname,lname,email', 'items'])
             ->whereIn('order_status', ['new', 'pending', 'processing'])
-            ->latest('transacted_at')
+            ->latest('created_at')
+            ->latest('id')
             ->limit(8)
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapQueueOrder($row));
