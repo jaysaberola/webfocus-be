@@ -33,6 +33,7 @@ class CustomerPortalController extends Controller
 
         $services = CustomerService::query()
             ->where('customer_id', $customer->id)
+            ->with('salesTransaction')
             ->orderByDesc('updated_at')
             ->get();
 
@@ -47,14 +48,18 @@ class CustomerPortalController extends Controller
             ->where('status', 'Open')
             ->count();
 
-        $activeServices = $services->where('status', 'Active')->count();
+        $activeServices = $services->filter(
+            fn (CustomerService $service) => CustomerPortalProvisioner::isActiveStatus(
+                CustomerPortalProvisioner::resolveStatusForService($service)
+            )
+        );
         $unpaid = $transactions->filter(fn ($row) => !in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true));
         $nextUnpaid = $unpaid->sortBy(fn ($row) => $row->transacted_at)->first();
 
         $stats = [
-            'activeNodes' => $activeServices . ' Active',
-            'activeNodesDetail' => $activeServices > 0
-                ? $services->firstWhere('status', 'Active')?->plan . ' High Availability'
+            'activeNodes' => $activeServices->count() . ' Active',
+            'activeNodesDetail' => $activeServices->count() > 0
+                ? $activeServices->first()?->plan . ' High Availability'
                 : 'No active services yet',
             'unpaidInvoices' => $unpaid->count() . ' Pending',
             'unpaidInvoicesDetail' => $nextUnpaid
@@ -83,6 +88,7 @@ class CustomerPortalController extends Controller
 
         $services = CustomerService::query()
             ->where('customer_id', $customer->id)
+            ->with('salesTransaction')
             ->orderByDesc('updated_at')
             ->get()
             ->map(fn (CustomerService $service) => $this->mapService($service))
@@ -776,6 +782,8 @@ class CustomerPortalController extends Controller
 
     private function mapService(CustomerService $service): array
     {
+        $status = CustomerPortalProvisioner::resolveStatusForService($service);
+
         return [
             'id' => (string) $service->id,
             'title' => $service->title,
@@ -784,7 +792,7 @@ class CustomerPortalController extends Controller
             'renewLabel' => $service->renew_label,
             'renewDate' => CustomerPortalProvisioner::formatRenewDate($service->renew_at),
             'renewNote' => $service->renew_note ?: CustomerPortalProvisioner::formatRenewNote($service->renew_at),
-            'status' => $service->status,
+            'status' => $status,
         ];
     }
 
@@ -796,11 +804,6 @@ class CustomerPortalController extends Controller
             'detail' => $item->name,
             'price' => (float) $item->total_price,
         ])->values()->all();
-
-        $payment = strtolower((string) $row->payment_status);
-        $order = strtolower((string) $row->order_status);
-        $isLive = in_array($payment, ['paid', 'completed', 'success'], true)
-            && in_array($order, ['completed', 'active', 'delivered', 'live'], true);
 
         $planLabel = TransactionLabelResolver::planLabel($row->items, $firstItem?->name);
 
@@ -814,7 +817,7 @@ class CustomerPortalController extends Controller
             'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'total' => WebDesignQuotation::displayAmount($row),
-            'status' => $isLive ? 'Active Live' : 'Pending Request',
+            'status' => CustomerPortalProvisioner::resolveServiceStatus($row),
             'gateway' => $this->extractPaymentMethod($row->notes),
             'items' => $items,
         ];
@@ -1156,7 +1159,7 @@ class CustomerPortalController extends Controller
         return CustomerService::query()
             ->where('customer_id', $transaction->customer_id)
             ->where('title', $itemName)
-            ->where('status', 'Active')
+            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
             ->whereNotNull('renew_at')
             ->where('renew_at', '<=', now()->addDays(7))
             ->exists();

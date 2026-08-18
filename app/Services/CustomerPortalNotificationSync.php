@@ -15,9 +15,20 @@ class CustomerPortalNotificationSync
 
         $services = CustomerService::query()
             ->where('customer_id', $customerId)
+            ->with('salesTransaction')
             ->get();
 
-        foreach ($services->where('status', 'Provisioning') as $service) {
+        foreach ($services as $service) {
+            $status = CustomerPortalProvisioner::resolveStatusForService($service);
+            if ($status !== $service->status) {
+                $service->status = $status;
+                $service->save();
+            }
+
+            if ($status !== CustomerPortalProvisioner::STATUS_PROVISIONING) {
+                continue;
+            }
+
             $key = 'provisioning:service:' . $service->id;
             $activeKeys[] = $key;
             $this->upsert($customerId, $key, [
@@ -35,14 +46,15 @@ class CustomerPortalNotificationSync
             ->get();
 
         foreach ($this->unpaidTransactions($transactions) as $transaction) {
+            $status = CustomerPortalProvisioner::resolveServiceStatus($transaction);
             $key = 'payment:transaction:' . $transaction->id;
             $activeKeys[] = $key;
             $itemNames = $transaction->items->pluck('name')->filter()->take(3)->implode(', ');
+            $submitted = $status === CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL;
 
             $this->upsert($customerId, $key, [
-                'title' => 'Payment pending admin approval',
-                'body' => 'We received your order for ' . ($itemNames ?: $transaction->transaction_no)
-                    . '. Provisioning begins only after payment is complete.',
+                'title' => $submitted ? 'Payment pending admin approval' : 'Pending Payment',
+                'body' => $this->paymentAlertMessage($transaction, $submitted),
                 'type' => 'payment',
                 'action_url' => '/public/dashboard?tab=orders',
             ]);
@@ -58,7 +70,10 @@ class CustomerPortalNotificationSync
     public function buildOverviewAlerts(Collection $services, Collection $transactions): array
     {
         $alerts = [];
-        $provisioning = $services->where('status', 'Provisioning');
+        $provisioning = $services->filter(
+            fn (CustomerService $service) => CustomerPortalProvisioner::resolveStatusForService($service)
+                === CustomerPortalProvisioner::STATUS_PROVISIONING
+        );
         $unpaid = $this->unpaidTransactions($transactions);
 
         if ($provisioning->isNotEmpty()) {
@@ -80,13 +95,18 @@ class CustomerPortalNotificationSync
 
         if ($unpaid->isNotEmpty()) {
             $count = $unpaid->count();
+            $first = $unpaid->first();
+            $submitted = CustomerPortalProvisioner::resolveServiceStatus($first)
+                === CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL;
             $alerts[] = [
                 'id' => 'alert-payment-summary',
                 'tone' => 'payment',
-                'title' => 'Payment pending admin approval',
+                'title' => $submitted || $count > 1
+                    ? 'Payment pending admin approval'
+                    : 'Pending Payment',
                 'message' => $count === 1
-                    ? $this->paymentAlertMessage($unpaid->first())
-                    : 'You have ' . $count . ' orders pending payment approval. Provisioning begins only after payment is complete.',
+                    ? $this->paymentAlertMessage($first, $submitted)
+                    : 'You have ' . $count . ' orders pending payment. Provisioning begins only after payment is complete.',
                 'actionLabel' => 'View Orders',
                 'actionHref' => '/public/dashboard?tab=orders',
                 'icon' => 'card',
@@ -96,12 +116,18 @@ class CustomerPortalNotificationSync
         return $alerts;
     }
 
-    private function paymentAlertMessage(SalesTransaction $transaction): string
+    private function paymentAlertMessage(SalesTransaction $transaction, bool $submitted = false): string
     {
         $itemNames = $transaction->items->pluck('name')->filter()->take(3)->implode(', ');
+        $label = $itemNames ?: $transaction->transaction_no;
 
-        return 'We received your order for ' . ($itemNames ?: $transaction->transaction_no)
-            . '. Provisioning begins only after payment is complete.';
+        if ($submitted) {
+            return 'We received your order for ' . $label
+                . '. Payment is pending admin approval. Provisioning begins only after payment is complete.';
+        }
+
+        return 'We received your order for ' . $label
+            . '. Complete payment to start provisioning.';
     }
 
     public function notifyServiceActivated(CustomerService $service): void
@@ -122,7 +148,7 @@ class CustomerPortalNotificationSync
     private function unpaidTransactions(Collection $transactions): Collection
     {
         return $transactions->filter(
-            fn ($row) => !in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true)
+            fn (SalesTransaction $row) => CustomerPortalProvisioner::isUnpaid($row)
         );
     }
 

@@ -198,7 +198,9 @@ class CommerceAdminController extends Controller
         $pendingQuotations = $this->pendingWebDesignQuotationsQuery()->count();
         $openTickets = CustomerSupportTicket::query()->whereIn('status', ['Open', 'In Progress'])->count();
         $activeClients = User::role('customer')->where('is_active', true)->count();
-        $activeServices = CustomerService::query()->where('status', 'Active')->count();
+        $activeServices = CustomerService::query()
+            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
+            ->count();
 
         return response()->json([
             'data' => [

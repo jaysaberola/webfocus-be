@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
 use App\Models\User;
+use App\Services\CustomerPortalProvisioner;
 use App\Support\ServiceCatalogLabelResolver;
 use App\Support\StorageUrl;
 use Illuminate\Http\Request;
@@ -35,10 +36,10 @@ class CustomerController extends Controller
         $customers = User::with([
                 'roles',
                 'owner:id,fname,lname,email',
-                'customerServices' => fn ($q) => $q->where('status', 'Active')->orderBy('id'),
+                'customerServices' => fn ($q) => $q->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])->orderBy('id'),
             ])
             ->withCount([
-                'customerServices as active_services_count' => fn ($q) => $q->where('status', 'Active'),
+                'customerServices as active_services_count' => fn ($q) => $q->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE]),
                 'salesTransactions as orders_count',
             ])
             ->role(self::ROLE)
@@ -535,7 +536,7 @@ class CustomerController extends Controller
 
         $existing = CustomerService::query()
             ->where('customer_id', $customer->id)
-            ->where('status', 'Active')
+            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
             ->get();
 
         $renewAt = now()->addYear();

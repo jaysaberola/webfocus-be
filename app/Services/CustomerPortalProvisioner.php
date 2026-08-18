@@ -3,12 +3,20 @@
 namespace App\Services;
 
 use App\Models\CustomerNotification;
+use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
 use App\Models\SalesTransaction;
+use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
 
 class CustomerPortalProvisioner
 {
+    public const STATUS_ACTIVE = 'Active Live';
+    public const STATUS_PROVISIONING = 'Provisioning';
+    public const STATUS_AWAITING_APPROVAL = 'Awaiting Approval';
+    public const STATUS_PENDING = 'Pending Request';
+    public const STATUS_EXPIRED = 'Expired';
+
     public function provisionFromTransaction(SalesTransaction $transaction): void
     {
         if (!$transaction->customer_id) {
@@ -16,11 +24,11 @@ class CustomerPortalProvisioner
         }
 
         $transaction->loadMissing('items');
-        $status = $this->resolveServiceStatus($transaction);
+        $status = self::resolveServiceStatus($transaction);
 
         foreach ($transaction->items as $item) {
             $category = $this->resolveCategory($item->name, $item->item_type);
-            $renewAt = $status === 'Active'
+            $renewAt = self::isActiveStatus($status)
                 ? ($transaction->transacted_at?->copy()->addYear() ?? now()->addYear())
                 : null;
 
@@ -40,11 +48,10 @@ class CustomerPortalProvisioner
         CustomerNotification::create([
             'customer_id' => $transaction->customer_id,
             'title' => 'Order Received',
-            'body' => "We received your order {$transaction->transaction_no}. "
-                . ($status === 'Provisioning'
-                    ? 'Provisioning begins after payment is confirmed.'
-                    : 'Your services are being activated.'),
-            'type' => $status === 'Provisioning' ? 'payment' : 'general',
+            'body' => "We received your order {$transaction->transaction_no}. " . self::orderReceivedNote($status),
+            'type' => in_array($status, [self::STATUS_PENDING, self::STATUS_AWAITING_APPROVAL], true)
+                ? 'payment'
+                : 'general',
             'action_url' => '/public/dashboard?tab=orders',
         ]);
 
@@ -58,7 +65,7 @@ class CustomerPortalProvisioner
         }
 
         $transaction->loadMissing('items');
-        $status = $this->resolveServiceStatus($transaction);
+        $status = self::resolveServiceStatus($transaction);
         $sync = app(CustomerPortalNotificationSync::class);
 
         foreach ($transaction->items as $item) {
@@ -68,7 +75,7 @@ class CustomerPortalProvisioner
                 ->where('title', $item->name)
                 ->first();
 
-            $renewAt = $status === 'Active'
+            $renewAt = self::isActiveStatus($status)
                 ? ($transaction->transacted_at?->copy()->addYear() ?? now()->addYear())
                 : null;
 
@@ -85,7 +92,7 @@ class CustomerPortalProvisioner
                 $previousStatus = $service->status;
                 $service->update($payload);
 
-                if ($previousStatus !== 'Active' && $status === 'Active') {
+                if (!self::isActiveStatus($previousStatus) && self::isActiveStatus($status)) {
                     $sync->notifyServiceActivated($service->fresh());
                 }
             } else {
@@ -123,21 +130,85 @@ class CustomerPortalProvisioner
         return 'Hosting';
     }
 
-    private function resolveServiceStatus(SalesTransaction $transaction): string
+    public static function resolveServiceStatus(SalesTransaction $transaction): string
     {
         $payment = strtolower((string) $transaction->payment_status);
         $order = strtolower((string) $transaction->order_status);
+        $paid = in_array($payment, ['paid', 'completed', 'success'], true);
+        $live = in_array($order, ['completed', 'active', 'delivered', 'live'], true);
 
-        if (in_array($payment, ['paid', 'completed', 'success'], true)
-            && in_array($order, ['completed', 'active', 'delivered', 'live'], true)) {
-            return 'Active';
+        if (in_array($order, ['cancelled', 'canceled', 'expired', 'failed'], true)) {
+            return self::STATUS_EXPIRED;
         }
 
-        if (in_array($order, ['cancelled', 'expired', 'failed'], true)) {
-            return 'Expired';
+        if ($paid && $live) {
+            return self::STATUS_ACTIVE;
         }
 
-        return 'Provisioning';
+        if ($paid) {
+            return self::STATUS_PROVISIONING;
+        }
+
+        if (self::isPaymentSubmitted($transaction)) {
+            return self::STATUS_AWAITING_APPROVAL;
+        }
+
+        return self::STATUS_PENDING;
+    }
+
+    public static function resolveStatusForService(CustomerService $service): string
+    {
+        $transaction = $service->salesTransaction;
+        if ($transaction) {
+            return self::resolveServiceStatus($transaction);
+        }
+
+        $stored = trim((string) $service->status);
+        if ($stored === 'Active') {
+            return self::STATUS_ACTIVE;
+        }
+
+        return $stored !== '' ? $stored : self::STATUS_PENDING;
+    }
+
+    public static function isActiveStatus(?string $status): bool
+    {
+        return in_array($status, ['Active', self::STATUS_ACTIVE], true);
+    }
+
+    public static function isPaymentSubmitted(SalesTransaction $transaction): bool
+    {
+        $notes = trim((string) $transaction->notes);
+        if ($notes !== '' && (
+            str_starts_with($notes, 'Invoice payment')
+            || str_starts_with($notes, 'Account credit top-up')
+        )) {
+            return true;
+        }
+
+        return CustomerPaymentProof::query()
+            ->where(function ($query) use ($transaction) {
+                $query->where('sales_transaction_id', $transaction->id)
+                    ->orWhere('invoice_id', 'INV-' . $transaction->transaction_no);
+            })
+            ->whereIn('status', ['Pending Review', 'Verified & Credited'])
+            ->exists();
+    }
+
+    public static function isUnpaid(SalesTransaction $transaction): bool
+    {
+        return !in_array(strtolower((string) $transaction->payment_status), ['paid', 'completed', 'success'], true)
+            && !WebDesignQuotation::isPendingQuotation($transaction);
+    }
+
+    private static function orderReceivedNote(string $status): string
+    {
+        return match ($status) {
+            self::STATUS_AWAITING_APPROVAL => 'Payment proof is pending admin approval. Provisioning begins after payment is complete.',
+            self::STATUS_PROVISIONING => 'Payment is confirmed and your services are being provisioned.',
+            self::STATUS_ACTIVE => 'Your services are now active.',
+            default => 'Provisioning begins after payment is confirmed.',
+        };
     }
 
     public static function formatRenewDate(?Carbon $renewAt): ?string
