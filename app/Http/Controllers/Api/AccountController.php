@@ -35,6 +35,7 @@ class AccountController extends Controller
                 'address_city',
                 'address_municipality',
                 'address_province',
+                'address_region',
                 'address_zip',
                 'address_country',
             ]),
@@ -61,6 +62,7 @@ class AccountController extends Controller
             'address_city' => 'nullable|string|max:120',
             'address_municipality' => 'nullable|string|max:120',
             'address_province' => 'nullable|string|max:120',
+            'address_region' => 'nullable|string|max:120',
             'address_zip' => 'nullable|string|max:30',
             'address_country' => 'nullable|string|max:120',
             'avatar' => 'nullable|image|mimes:jpeg,png,jpg|max:1024',
@@ -100,6 +102,9 @@ class AccountController extends Controller
         if ($request->exists('address_province')) {
             $user->address_province = $request->address_province;
         }
+        if ($request->exists('address_region')) {
+            $user->address_region = $request->address_region;
+        }
         if ($request->exists('address_zip')) {
             $user->address_zip = $request->address_zip;
         }
@@ -125,6 +130,7 @@ class AccountController extends Controller
                     'address_city',
                     'address_municipality',
                     'address_province',
+                    'address_region',
                     'address_zip',
                     'address_country',
                 ]),
