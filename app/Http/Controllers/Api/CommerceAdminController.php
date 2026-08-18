@@ -315,7 +315,11 @@ class CommerceAdminController extends Controller
             'lname' => $payload['lname'] ?? $customer->lname,
             'mobile' => $payload['mobile'] ?? $customer->mobile,
             'mname' => $payload['mname'] ?? $customer->mname,
+            'address_country' => $payload['address_country'] ?? $customer->address_country,
+            'address_province' => $payload['address_province'] ?? $customer->address_province,
+            'address_city' => $payload['address_city'] ?? $customer->address_city,
             'address_street' => $payload['address_street'] ?? $customer->address_street,
+            'address_zip' => $payload['address_zip'] ?? $customer->address_zip,
         ];
 
         if (!empty($payload['avatar_path'])) {
@@ -697,7 +701,11 @@ class CommerceAdminController extends Controller
             'lname' => 'Last Name',
             'mobile' => 'Mobile Phone',
             'mname' => 'Company Legal Name',
-            'address_street' => 'Billing Address',
+            'address_country' => 'Billing Country',
+            'address_province' => 'Billing Province',
+            'address_city' => 'Billing City',
+            'address_street' => 'Billing Street',
+            'address_zip' => 'Billing Code',
         ];
         $changes = [];
 

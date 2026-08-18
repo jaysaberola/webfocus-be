@@ -423,7 +423,11 @@ class CustomerPortalController extends Controller
             'lname' => ['required', 'string', 'max:255'],
             'mobile' => ['nullable', 'string', 'max:60'],
             'mname' => ['nullable', 'string', 'max:255'],
-            'address_street' => ['nullable', 'string', 'max:255'],
+            'address_country' => ['nullable', 'string', 'max:255'],
+            'address_province' => ['nullable', 'string', 'max:255'],
+            'address_city' => ['nullable', 'string', 'max:255'],
+            'address_street' => ['nullable', 'string', 'max:500'],
+            'address_zip' => ['nullable', 'string', 'max:30'],
             'summary' => ['nullable', 'string', 'max:500'],
             'avatar' => ['nullable', 'image', 'mimes:jpeg,png,jpg', 'max:1024'],
         ]);
@@ -440,7 +444,11 @@ class CustomerPortalController extends Controller
             'lname' => $validated['lname'],
             'mobile' => $validated['mobile'] ?? null,
             'mname' => $validated['mname'] ?? null,
+            'address_country' => $validated['address_country'] ?? null,
+            'address_province' => $validated['address_province'] ?? null,
+            'address_city' => $validated['address_city'] ?? null,
             'address_street' => $validated['address_street'] ?? null,
+            'address_zip' => $validated['address_zip'] ?? null,
         ];
 
         $currentSnapshot = [
@@ -448,7 +456,11 @@ class CustomerPortalController extends Controller
             'lname' => $customer->lname,
             'mobile' => $customer->mobile,
             'mname' => $customer->mname,
+            'address_country' => $customer->address_country,
+            'address_province' => $customer->address_province,
+            'address_city' => $customer->address_city,
             'address_street' => $customer->address_street,
+            'address_zip' => $customer->address_zip,
             'avatar' => $customer->avatar,
         ];
 
