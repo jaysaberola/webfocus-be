@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Support\ServiceCatalogLabelResolver;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
+use App\Support\WebDesignQuotation;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
@@ -73,7 +74,34 @@ class CommerceAdminController extends Controller
         abort_unless((bool) $assignee->is_active, 422, 'Selected user is not active.');
         abort_if($assignee->hasRole('customer'), 422, 'Customer accounts cannot be assigned to transactions.');
 
+        $salesTransaction->loadMissing('items');
+        if (WebDesignQuotation::isWebDesign($salesTransaction)) {
+            abort_unless(
+                $assignee->hasAnyRole(['sales_staff', 'sales_admin', 'admin']),
+                422,
+                'Web design orders must be assigned to active Sales Staff.'
+            );
+        }
+
         $salesTransaction->update(['user_id' => $assignee->id]);
+
+        if (WebDesignQuotation::isWebDesign($salesTransaction) && WebDesignQuotation::isPendingQuotation($salesTransaction)) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $assignee->id,
+                    'reference_key' => 'admin:webdesign-assigned:' . $salesTransaction->id,
+                ],
+                [
+                    'title' => 'New Web Design Assignment',
+                    'body' => 'You were assigned web design order '
+                        . $salesTransaction->transaction_no
+                        . '. Upload the proposal quotation in Orders.',
+                    'type' => 'web_design_quotation',
+                    'action_url' => '/public/commerce-admin?tab=orders',
+                    'read_at' => null,
+                ]
+            );
+        }
 
         $fresh = $salesTransaction->fresh()->load([
             'customer:id,fname,lname,email',
@@ -513,7 +541,7 @@ class CommerceAdminController extends Controller
     {
         $staff = $this->resolveStaff($request);
         $perPage = $request->integer('per_page', 50);
-        $isSales = $staff->hasRole('sales_admin');
+        $isSales = $staff->hasAnyRole(['sales_admin', 'sales_staff']);
 
         // Web design quotations are Sales-only.
         $clientAlerts = collect();
@@ -803,7 +831,7 @@ class CommerceAdminController extends Controller
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
             'issuedDate' => TransactionLabelResolver::issuedDateFrom($transactedAt),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($transactedAt),
-            'amount' => (float) ($transaction?->grand_total ?? 0),
+            'amount' => $transaction ? WebDesignQuotation::displayAmount($transaction) : 0.0,
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($items),
             'plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
         ];
@@ -867,7 +895,7 @@ class CommerceAdminController extends Controller
             'orderId' => $row->transaction_no,
             'company' => $row->customer_name ?: ($row->customer?->full_name ?? 'Unknown'),
             'dateCreated' => optional($row->transacted_at)->format('Y-m-d'),
-            'amount' => (float) $row->grand_total,
+            'amount' => WebDesignQuotation::displayAmount($row),
             'status' => ucfirst($row->order_status ?: 'New'),
         ];
     }
@@ -894,7 +922,7 @@ class CommerceAdminController extends Controller
             'reference' => $row->transaction_no,
             'company' => $row->customer_name ?: ($row->customer?->full_name ?? 'Unknown'),
             'dueDate' => optional($row->transacted_at)->format('Y-m-d'),
-            'amount' => (float) $row->grand_total,
+            'amount' => WebDesignQuotation::displayAmount($row),
             'status' => 'Overdue',
         ];
     }
@@ -924,7 +952,7 @@ class CommerceAdminController extends Controller
             })
             ->where(function ($query) {
                 $query->whereNull('notes')
-                    ->orWhere('notes', 'not like', '%Pricing: Set by Sales%');
+                    ->orWhere('notes', 'not like', '%Payment: Requested%');
             });
     }
 
@@ -954,23 +982,29 @@ class CommerceAdminController extends Controller
             ? $row->items->pluck('name')->filter()->take(3)->implode(', ')
             : '';
 
+        $needsProposal = ! WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SUBMITTED);
+        $needsProceed = WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SIGNED);
+        $title = $needsProceed
+            ? 'Proceed Payment — signed proposal received'
+            : ($needsProposal ? 'Upload Proposal Quotation' : 'Waiting for client to sign proposal');
+        $status = $needsProceed ? 'Proceed Payment' : ($needsProposal ? 'Upload Proposal' : 'Awaiting Signature');
+
         return [
             'id' => (int) $row->id,
             'kind' => 'web_design_quotation',
-            'title' => 'Web Design Quotation Request',
+            'title' => $title,
             'desc' => trim(
-                "{$client} checked out a web design package"
+                "{$client} has a web design order"
                 . ($itemNames ? " ({$itemNames})" : '')
-                . ". Transaction {$row->transaction_no} needs Sales pricing."
+                . ". Transaction {$row->transaction_no}."
             ),
             'date' => $this->formatAppDateTime(
-                // Prefer created_at (actual submit time); avoid UTC ISO stored as naive transacted_at.
                 $row->created_at ?? $row->transacted_at
             ),
             'audience' => $client,
             'email' => $row->customer_email ?: ($customer?->email),
             'transactionNo' => $row->transaction_no,
-            'status' => 'Needs Pricing',
+            'status' => $status,
             'actionUrl' => '/public/commerce-admin?tab=orders',
         ];
     }

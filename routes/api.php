@@ -55,6 +55,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/billing/add-funds', [CustomerPortalController::class, 'addFunds']);
         Route::post('/billing/payment-proofs', [CustomerPortalController::class, 'uploadPaymentProof']);
         Route::delete('/billing/payment-proofs/{paymentProof}', [CustomerPortalController::class, 'deletePaymentProof']);
+        Route::get('/billing/proposals/{salesTransaction}', [CustomerPortalController::class, 'listProposals']);
+        Route::post('/billing/proposals', [CustomerPortalController::class, 'uploadSignedProposal']);
         Route::get('/notifications', [CustomerPortalController::class, 'notifications']);
         Route::get('/notifications/unread-count', [CustomerPortalController::class, 'unreadNotificationCount']);
         Route::patch('/notifications/read-all', [CustomerPortalController::class, 'markAllNotificationsRead']);
@@ -87,6 +89,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Commerce data shared by CMS modules and Commerce Control Center
     Route::apiResource('sales-transactions', SalesTransactionController::class)
         ->parameters(['sales-transactions' => 'salesTransaction']);
+    Route::get('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'proposals']);
+    Route::post('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'uploadProposal']);
+    Route::post('/sales-transactions/{salesTransaction}/proceed-payment', [SalesTransactionController::class, 'proceedPayment']);
     Route::get('/customers', [CustomerController::class, 'index']);
     Route::post('/customers', [CustomerController::class, 'store']);
     Route::post('/customers/bulk-delete', [CustomerController::class, 'bulkDestroy']);

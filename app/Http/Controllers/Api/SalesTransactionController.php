@@ -6,15 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Mail\WebDesignQuotationMail;
 use App\Models\CustomerNotification;
 use App\Models\SalesTransaction;
+use App\Models\SalesTransactionProposal;
 use App\Models\Setting;
 use App\Models\User;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
+use App\Support\StorageUrl;
+use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Throwable;
 
@@ -29,6 +33,7 @@ class SalesTransactionController extends Controller
                 'customer:id,fname,lname,email',
                 'user:id,fname,lname,email',
                 'items',
+                'proposals',
             ])
             ->when($request->search, function ($q) use ($request) {
                 $term = $request->search;
@@ -186,8 +191,118 @@ class SalesTransactionController extends Controller
             'data' => $salesTransaction->load([
                 'customer:id,fname,lname,email',
                 'items',
+                'proposals',
             ]),
         ]);
+    }
+
+    public function proposals(SalesTransaction $salesTransaction)
+    {
+        $rows = $salesTransaction->proposals()->latest()->get()->map(
+            fn (SalesTransactionProposal $proposal) => $this->mapProposal($proposal)
+        );
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function uploadProposal(Request $request, SalesTransaction $salesTransaction)
+    {
+        $this->assertSalesCanManageWebDesign($request);
+        abort_unless(WebDesignQuotation::isWebDesign($salesTransaction), 422, 'This order is not a web design quotation.');
+        abort_unless(WebDesignQuotation::isPendingQuotation($salesTransaction), 422, 'Payment has already been requested for this quotation.');
+
+        $validated = $request->validate([
+            'file' => ['required', 'file', 'mimes:pdf,doc,docx,png,jpg,jpeg', 'max:10240'],
+        ]);
+
+        $file = $validated['file'];
+        $path = $file->store('web-design-proposals/' . $salesTransaction->id, 'public');
+
+        $proposal = SalesTransactionProposal::create([
+            'sales_transaction_id' => $salesTransaction->id,
+            'uploaded_by' => $request->user()?->id,
+            'version' => 1,
+            'kind' => 'proposal',
+            'file_path' => $path,
+            'file_name' => $file->getClientOriginalName(),
+        ]);
+
+        $salesTransaction->update([
+            'notes' => WebDesignQuotation::appendMarker(
+                $salesTransaction->notes,
+                WebDesignQuotation::PROPOSAL_SUBMITTED
+            ),
+        ]);
+
+        if ($salesTransaction->customer_id) {
+            CustomerNotification::create([
+                'customer_id' => $salesTransaction->customer_id,
+                'title' => 'Proposal Quotation Ready',
+                'body' => 'A proposal quotation for '
+                    . $salesTransaction->transaction_no
+                    . ' is ready to review. Download it, sign it, and re-upload the signed copy.',
+                'type' => 'billing',
+                'action_url' => '/public/dashboard?tab=billing',
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Proposal quotation uploaded. The client can now download and sign it.',
+            'data' => $this->mapProposal($proposal),
+        ], 201);
+    }
+
+    public function proceedPayment(Request $request, SalesTransaction $salesTransaction)
+    {
+        $this->assertSalesCanManageWebDesign($request);
+        abort_unless(WebDesignQuotation::isWebDesign($salesTransaction), 422, 'This order is not a web design quotation.');
+        abort_unless(
+            WebDesignQuotation::hasMarker($salesTransaction, WebDesignQuotation::PROPOSAL_SIGNED),
+            422,
+            'The client must sign and re-upload the proposal before payment can proceed.'
+        );
+        abort_if(
+            (float) $salesTransaction->grand_total <= 0,
+            422,
+            'Set the web design price before requesting payment.'
+        );
+
+        $salesTransaction->update([
+            'notes' => WebDesignQuotation::appendMarker(
+                $salesTransaction->notes,
+                WebDesignQuotation::PAYMENT_REQUESTED
+            ),
+            'payment_status' => 'pending',
+        ]);
+
+        if ($salesTransaction->customer_id) {
+            CustomerNotification::create([
+                'customer_id' => $salesTransaction->customer_id,
+                'title' => 'Upload Proof of Payment',
+                'body' => 'Please upload your proof of payment for invoice INV-'
+                    . $salesTransaction->transaction_no
+                    . '. Attach a receipt file from Billing.',
+                'type' => 'billing',
+                'action_url' => '/public/dashboard?tab=billing',
+            ]);
+        }
+
+        return response()->json([
+            'message' => 'Payment requested. The client has been notified to upload proof of payment.',
+            'data' => $salesTransaction->fresh(['items', 'proposals', 'user', 'customer']),
+        ]);
+    }
+
+    private function mapProposal(SalesTransactionProposal $proposal): array
+    {
+        return [
+            'id' => $proposal->id,
+            'version' => (int) $proposal->version,
+            'kind' => $proposal->kind,
+            'fileName' => $proposal->file_name,
+            'fileUrl' => StorageUrl::publicAsset($proposal->file_path),
+            'uploadedAt' => optional($proposal->created_at)->format('Y-m-d H:i'),
+        ];
     }
 
     public function update(
@@ -238,11 +353,13 @@ class SalesTransactionController extends Controller
             'notes' => $request->has('notes')
                 ? $request->input('notes')
                 : $salesTransaction->notes,
-            'transacted_at' => $request->input(
-                'transacted_at',
-                optional($salesTransaction->transacted_at)?->format('Y-m-d')
-            ),
         ]);
+
+        if ($request->exists('transacted_at')) {
+            $request->merge([
+                'transacted_at' => $request->input('transacted_at'),
+            ]);
+        }
 
         $validated = $this->validatedPayload($request, $salesTransaction->id);
         $items = $validated['items'] ?? null;
@@ -289,6 +406,15 @@ class SalesTransactionController extends Controller
         return response()->json([
             'message' => 'Sales transaction deleted successfully',
         ]);
+    }
+
+    private function assertSalesCanManageWebDesign(Request $request): void
+    {
+        abort_unless(
+            (bool) $request->user()?->hasAnyRole(['sales_staff', 'sales_admin', 'admin']),
+            403,
+            'Only Sales Staff can upload proposals or request payment for web design orders.'
+        );
     }
 
     private function validatedPayload(
@@ -481,12 +607,12 @@ class SalesTransactionController extends Controller
 
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             $transaction->customer_id ? (int) $transaction->customer_id : null,
-            ['sales_admin'],
+            ['sales_admin', 'sales_staff'],
             'admin:webdesign-quotation:' . $transaction->id,
             'Web Design Quotation Request',
             "{$clientLabel} submitted a Pending Quotation checkout"
                 . ($itemNames ? " for {$itemNames}" : '')
-                . " ({$transaction->transaction_no}). Set the package price in Orders.",
+                . " ({$transaction->transaction_no}). Assign a Sales Staff member and upload the proposal quotation.",
             'web_design_quotation',
             '/public/commerce-admin?tab=orders',
             false,

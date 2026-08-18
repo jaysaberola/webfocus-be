@@ -10,9 +10,11 @@ use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\SalesTransactionItem;
+use App\Models\SalesTransactionProposal;
 use App\Models\User;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
+use App\Support\WebDesignQuotation;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
@@ -96,7 +98,8 @@ class CustomerPortalController extends Controller
         $orders = SalesTransaction::query()
             ->where('customer_id', $customer->id)
             ->with('items')
-            ->latest('transacted_at')
+            ->latest('created_at')
+            ->latest('id')
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapOrder($row))
             ->values();
@@ -110,16 +113,18 @@ class CustomerPortalController extends Controller
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with('items')
+            ->with(['items', 'proposals'])
             ->when($request->filled('date_from'), fn ($q) => $q->whereDate('transacted_at', '>=', $request->input('date_from')))
             ->when($request->filled('date_to'), fn ($q) => $q->whereDate('transacted_at', '<=', $request->input('date_to')))
-            ->latest('transacted_at')
+            ->latest('created_at')
+            ->latest('id')
             ->get();
 
         $allTransactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with('items')
-            ->latest('transacted_at')
+            ->with(['items', 'proposals'])
+            ->latest('created_at')
+            ->latest('id')
             ->get();
 
         $invoices = $transactions->map(fn (SalesTransaction $row) => $this->mapInvoice($row))->values();
@@ -153,6 +158,11 @@ class CustomerPortalController extends Controller
 
         $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
         $this->assertInvoicePayable($transaction);
+        abort_if(
+            WebDesignQuotation::isPendingQuotation($transaction),
+            422,
+            'This web design order is still Pending Quotation. Wait for Sales to request payment before uploading proof.'
+        );
 
         $invoiceId = $this->invoiceId($transaction);
 
@@ -229,13 +239,29 @@ class CustomerPortalController extends Controller
 
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             (int) $customer->id,
-            ['finance_admin', 'sales_admin', 'admin', 'customer_care'],
+            ['finance_admin', 'sales_admin', 'sales_staff', 'admin', 'customer_care'],
             'admin:payment-proof:' . $proof->id,
             'Payment Proof Pending Review',
-            "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}.",
+            "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}. Review it in Approvals.",
             'payment_proof',
             '/public/commerce-admin?tab=approvals',
         );
+
+        if ($transaction->user_id && (int) $transaction->user_id !== (int) $customer->id) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $transaction->user_id,
+                    'reference_key' => 'admin:payment-proof:' . $proof->id,
+                ],
+                [
+                    'title' => 'Client Uploaded Proof of Payment',
+                    'body' => "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}. Review it in Approvals.",
+                    'type' => 'payment_proof',
+                    'action_url' => '/public/commerce-admin?tab=approvals',
+                    'read_at' => null,
+                ]
+            );
+        }
 
         app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
 
@@ -256,6 +282,109 @@ class CustomerPortalController extends Controller
         $paymentProof->delete();
 
         return response()->json(['message' => 'Payment proof deleted']);
+    }
+
+    public function listProposals(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+
+        $rows = $salesTransaction->proposals()->latest()->get()->map(fn (SalesTransactionProposal $proposal) => [
+            'id' => $proposal->id,
+            'version' => (int) $proposal->version,
+            'kind' => $proposal->kind,
+            'fileName' => $proposal->file_name,
+            'fileUrl' => StorageUrl::publicAsset($proposal->file_path),
+            'uploadedAt' => optional($proposal->created_at)->format('Y-m-d H:i'),
+        ]);
+
+        return response()->json(['data' => $rows]);
+    }
+
+    public function uploadSignedProposal(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+        $validated = $request->validate([
+            'invoice_id' => ['required', 'string', 'max:120'],
+            'file' => ['required', 'file', 'mimes:pdf,doc,docx,png,jpg,jpeg', 'max:10240'],
+        ]);
+
+        $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
+        abort_unless(WebDesignQuotation::isWebDesign($transaction), 422, 'This invoice is not a web design quotation.');
+        abort_unless(
+            WebDesignQuotation::hasMarker($transaction, WebDesignQuotation::PROPOSAL_SUBMITTED),
+            422,
+            'No proposal quotation is available to sign yet.'
+        );
+        abort_if(
+            WebDesignQuotation::isPaymentRequested($transaction),
+            422,
+            'Payment has already been requested for this quotation.'
+        );
+
+        $file = $validated['file'];
+        $path = $file->store('web-design-proposals/' . $transaction->id, 'public');
+
+        $proposal = SalesTransactionProposal::create([
+            'sales_transaction_id' => $transaction->id,
+            'uploaded_by' => $customer->id,
+            'version' => 2,
+            'kind' => 'signed',
+            'file_path' => $path,
+            'file_name' => $file->getClientOriginalName(),
+        ]);
+
+        $transaction->update([
+            'notes' => WebDesignQuotation::appendMarker(
+                $transaction->notes,
+                WebDesignQuotation::PROPOSAL_SIGNED
+            ),
+        ]);
+
+        $assigneeId = $transaction->user_id;
+        $roles = ['sales_staff', 'sales_admin'];
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $customer->id,
+            $roles,
+            'admin:webdesign-signed:' . $transaction->id,
+            'Signed Proposal Uploaded',
+            trim(($customer->mname ?: $customer->full_name) ?: 'Client')
+                . ' uploaded the signed proposal for '
+                . $transaction->transaction_no
+                . '. You can now proceed to payment.',
+            'web_design_quotation',
+            '/public/commerce-admin?tab=orders',
+            false,
+        );
+
+        if ($assigneeId) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $assigneeId,
+                    'reference_key' => 'admin:webdesign-signed:' . $transaction->id,
+                ],
+                [
+                    'title' => 'Signed Proposal Uploaded',
+                    'body' => 'The client signed and re-uploaded the proposal for '
+                        . $transaction->transaction_no
+                        . '. Click Proceed Payment in Orders.',
+                    'type' => 'web_design_quotation',
+                    'action_url' => '/public/commerce-admin?tab=orders',
+                    'read_at' => null,
+                ]
+            );
+        }
+
+        return response()->json([
+            'message' => 'Signed proposal uploaded. Sales will review it and request payment.',
+            'data' => [
+                'id' => $proposal->id,
+                'version' => 2,
+                'kind' => 'signed',
+                'fileName' => $proposal->file_name,
+                'fileUrl' => StorageUrl::publicAsset($proposal->file_path),
+            ],
+        ], 201);
     }
 
     public function notifications(Request $request)
@@ -678,9 +807,10 @@ class CustomerPortalController extends Controller
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
             'plan' => $planLabel,
             'date' => TransactionLabelResolver::issuedDateFrom($row->transacted_at),
+            'createdAt' => optional($row->created_at)?->toIso8601String(),
             'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
-            'total' => (float) $row->grand_total,
+            'total' => WebDesignQuotation::displayAmount($row),
             'status' => $isLive ? 'Active Live' : 'Pending Request',
             'gateway' => $this->extractPaymentMethod($row->notes),
             'items' => $items,
@@ -697,10 +827,15 @@ class CustomerPortalController extends Controller
             ? now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false)
             : null;
         $paymentSubmitted = $this->isPaymentSubmitted($row);
-        $canPay = !$paid && !$paymentSubmitted && $daysUntilDue !== null && $daysUntilDue <= 7;
+        $pendingQuotation = WebDesignQuotation::isPendingQuotation($row);
+        $proposalSubmitted = WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SUBMITTED);
+        $proposalSigned = WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SIGNED);
+        $canPay = !$paid && !$paymentSubmitted && !$pendingQuotation && $daysUntilDue !== null && $daysUntilDue <= 7;
 
         if ($paid) {
             $status = 'Paid';
+        } elseif ($pendingQuotation) {
+            $status = 'Pending Quotation';
         } elseif ($paymentSubmitted) {
             $status = 'Awaiting Approval';
         } elseif ($daysUntilDue !== null && $daysUntilDue < 0) {
@@ -711,12 +846,17 @@ class CustomerPortalController extends Controller
             $status = 'Pending Payment';
         }
 
+        $proposal = $row->relationLoaded('proposals')
+            ? $row->proposals->where('kind', 'proposal')->sortByDesc('id')->first()
+            : $row->proposals()->where('kind', 'proposal')->latest()->first();
+
         return [
             'id' => $this->invoiceId($row),
             'transactionNo' => $row->transaction_no,
             'date' => optional($row->transacted_at)->format('Y-m-d'),
+            'createdAt' => optional($row->created_at)?->toIso8601String(),
             'due' => optional($dueAt)->format('Y-m-d'),
-            'amount' => (float) $row->grand_total,
+            'amount' => WebDesignQuotation::displayAmount($row),
             'status' => $status,
             'canPay' => $canPay,
             'daysUntilDue' => $daysUntilDue,
@@ -724,6 +864,12 @@ class CustomerPortalController extends Controller
             'plan' => $planLabel,
             'subscription' => $planLabel,
             'items' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
+            'pendingQuotation' => $pendingQuotation,
+            'proposalSubmitted' => $proposalSubmitted,
+            'proposalSigned' => $proposalSigned,
+            'proposalFileName' => $proposal?->file_name,
+            'proposalUrl' => StorageUrl::publicAsset($proposal?->file_path),
+            'actionsDisabled' => $pendingQuotation && ! $proposalSubmitted,
         ];
     }
 
@@ -934,9 +1080,13 @@ class CustomerPortalController extends Controller
 
     private function buildBillingReminder(Collection $transactions): ?array
     {
-        $pending = $transactions->filter(
-            fn ($row) => !in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true)
-        );
+        $pending = $transactions->filter(function (SalesTransaction $row) {
+            if (in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true)) {
+                return false;
+            }
+
+            return ! WebDesignQuotation::isPendingQuotation($row);
+        });
 
         if ($pending->isEmpty()) {
             return null;
@@ -973,7 +1123,7 @@ class CustomerPortalController extends Controller
             'transactionNo' => $candidate->transaction_no,
             'title' => $candidate->items->first()?->name ?? $candidate->transaction_no,
             'dueDate' => $dueAt->format('F j, Y'),
-            'amount' => (float) $candidate->grand_total,
+            'amount' => WebDesignQuotation::displayAmount($candidate),
             'kind' => $isRenewal ? 'renewal' : 'payment',
             'headline' => $isRenewal
                 ? 'Renewal Reminder: Invoice ' . $dueDaysLabel
