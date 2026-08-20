@@ -130,8 +130,14 @@ class SalesTransactionController extends Controller
         ]);
 
         $validated = $this->validatedPayload($request);
-        $items = $validated['items'] ?? [];
+        $items = $this->pricedCheckoutItems($validated['items'] ?? []);
         unset($validated['items']);
+
+        abort_if(
+            $items === [],
+            422,
+            'No priced cart items to pay. Pending quotations are billed on a separate invoice.'
+        );
 
         $validated['customer_id'] = $customer->id;
         $validated['customer_name'] = trim(
@@ -148,6 +154,11 @@ class SalesTransactionController extends Controller
         $validated['payment_status'] = 'pending';
         $validated['order_status'] = 'pending';
         $validated['user_id'] = $customer->id;
+        $validated['notes'] = $this->combinedCheckoutNotes(
+            $validated['notes'] ?? null,
+            $validated['transaction_no'],
+            $items
+        );
 
         $transaction = DB::transaction(function () use ($validated, $items) {
             $transaction = SalesTransaction::create($validated);
@@ -543,6 +554,66 @@ class SalesTransactionController extends Controller
 
         // Browser sends UTC ISO (toISOString); store wall-clock in app timezone (Asia/Manila).
         return Carbon::parse($value)->timezone(config('app.timezone', 'Asia/Manila'));
+    }
+
+    private function pricedCheckoutItems(array $items): array
+    {
+        return array_values(array_filter($items, function ($item) {
+            if (! is_array($item)) {
+                return false;
+            }
+
+            return $this->checkoutItemHasAvailableAmount($item)
+                && ! $this->isPendingQuotationCheckoutItem($item);
+        }));
+    }
+
+    private function checkoutItemHasAvailableAmount(array $item): bool
+    {
+        $quantity = (float) ($item['quantity'] ?? 1);
+        $price = (float) ($item['price'] ?? 0);
+        $total = array_key_exists('total_price', $item) && $item['total_price'] !== null
+            ? (float) $item['total_price']
+            : $price * $quantity;
+
+        return $total > 0;
+    }
+
+    private function isPendingQuotationCheckoutItem(array $item): bool
+    {
+        $type = strtolower((string) ($item['item_type'] ?? ''));
+        $name = strtolower((string) ($item['name'] ?? ''));
+        $isWebDesign = str_contains($type, 'web_design')
+            || str_contains($type, 'webdesign')
+            || str_contains($name, 'web design')
+            || str_contains($name, 'starter launch')
+            || str_contains($name, 'professional corporate')
+            || str_contains($name, 'e-commerce')
+            || str_contains($name, 'website template');
+
+        return $isWebDesign && ! $this->checkoutItemHasAvailableAmount($item);
+    }
+
+    private function combinedCheckoutNotes(
+        ?string $notes,
+        string $transactionNo,
+        array $items
+    ): string {
+        $count = count($items);
+        $header = $count > 1
+            ? "Combined invoice {$transactionNo}: {$count} priced cart items paid in one transaction."
+            : "Invoice {$transactionNo}: 1 priced cart item.";
+        $current = trim((string) $notes);
+
+        if ($current === '') {
+            return $header;
+        }
+
+        if (str_contains($current, 'Combined invoice') || str_contains($current, "Invoice {$transactionNo}")) {
+            return $current;
+        }
+
+        return $header."\n".$current;
     }
 
     private function generateTransactionNo(): string
