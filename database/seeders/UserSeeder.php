@@ -155,5 +155,35 @@ class UserSeeder extends Seeder
             ]
         );
         $marketing->syncRoles([$marketingRole]);
+
+        $clientOwners = config('commerce.client_owners', []);
+        foreach ($clientOwners as $person) {
+            $email = strtolower(trim((string) ($person['email'] ?? '')));
+            if ($email === '') {
+                continue;
+            }
+
+            $roleName = (string) ($person['role'] ?? 'customer_care');
+            $role = Role::where('name', $roleName)->where('guard_name', 'sanctum')->first()
+                ?? $customerCareRole;
+
+            $user = User::query()->where('email', $email)->first();
+            if (!$user) {
+                $user = User::create([
+                    'email' => $email,
+                    'fname' => $person['fname'] ?? '',
+                    'lname' => $person['lname'] ?? '',
+                    'password' => $defaultPassword,
+                    'is_active' => true,
+                ]);
+            } else {
+                $user->fname = $person['fname'] ?? $user->fname;
+                $user->lname = $person['lname'] ?? $user->lname;
+                $user->is_active = true;
+                $user->save();
+            }
+
+            $user->assignRole($role);
+        }
     }
 }

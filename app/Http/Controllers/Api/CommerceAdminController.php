@@ -41,10 +41,29 @@ class CommerceAdminController extends Controller
             ->where('is_active', true)
             ->whereDoesntHave('roles', function ($query) {
                 $query->where('name', 'customer');
-            })
-            ->orderBy('fname')
-            ->orderBy('lname')
-            ->get()
+            });
+
+        if ($request->input('for') === 'client_owner') {
+            $ownerEmails = collect(config('commerce.client_owners', []))
+                ->pluck('email')
+                ->filter()
+                ->values();
+            $users->whereIn('email', $ownerEmails);
+            $records = $users
+                ->get()
+                ->sortBy(function (User $user) use ($ownerEmails) {
+                    $index = $ownerEmails->search(fn ($email) => strcasecmp((string) $email, (string) $user->email) === 0);
+                    return $index === false ? 999 : $index;
+                })
+                ->values();
+        } else {
+            $records = $users
+                ->orderBy('fname')
+                ->orderBy('lname')
+                ->get();
+        }
+
+        $payload = $records
             ->map(fn (User $user) => [
                 'id' => $user->id,
                 'name' => trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')) ?: ($user->email ?? 'User'),
@@ -54,7 +73,7 @@ class CommerceAdminController extends Controller
             ])
             ->values();
 
-        return response()->json(['data' => $users]);
+        return response()->json(['data' => $payload]);
     }
 
     public function assignSalesTransaction(Request $request, SalesTransaction $salesTransaction)
