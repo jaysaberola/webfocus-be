@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\DomainTld;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 class DomainLookupController extends Controller
@@ -100,6 +101,7 @@ class DomainLookupController extends Controller
                 'pricing_error' => $result['pricing_error'] ?? null,
                 'fallback_reason' => $result['fallback_reason'] ?? null,
                 'pricing_message' => $result['pricing_message'] ?? null,
+                'local_database_match' => (bool) ($result['local_database_match'] ?? false),
                 'code' => $result['rrpCode'] ?? null,
                 'message' => $result['rrpText'] ?? null,
             ];
@@ -144,12 +146,17 @@ class DomainLookupController extends Controller
         | eNom remains the primary checker. WebNIC is only used as an optional
         | fallback when eNom cannot give a final available/taken answer.
         */
+        $pendingLocalDomains = $this->findPendingLocalDomains([$domain]);
+        $availabilityResult = isset($pendingLocalDomains[$domain])
+            ? $this->localPendingDomainResult()
+            : $this->checkDomainAvailabilityCached($domain);
+
         $availability = $this->attachCustomerPrice(array_merge(
             [
                 'domain' => $domain,
                 'database_price' => (float) ($matchedTld->category->selling_price ?? 0),
             ],
-            $this->checkDomainAvailabilityCached($domain)
+            $availabilityResult
         ));
 
         /*
@@ -186,6 +193,7 @@ class DomainLookupController extends Controller
             'pricing_error' => $availability['pricing_error'] ?? null,
             'fallback_reason' => $availability['fallback_reason'] ?? null,
             'pricing_message' => $availability['pricing_message'] ?? null,
+            'local_database_match' => (bool) ($availability['local_database_match'] ?? false),
 
             'suggestions' => $suggestions,
         ]);
@@ -193,6 +201,24 @@ class DomainLookupController extends Controller
 
     private function attachCustomerPrice(array $result): array
     {
+        // A pending local transaction already reserves this exact domain.
+        // Do not call eNom/WebNIC pricing for a domain that cannot be purchased.
+        if (($result['local_database_match'] ?? false) === true) {
+            $result['price'] = null;
+            $result['currency'] = 'PHP';
+            $result['provider_currency'] = null;
+            $result['provider_register_price'] = null;
+            $result['price_provider'] = null;
+            $result['exchange_rate_to_php'] = null;
+            $result['markup_percent'] = null;
+            $result['price_source'] = 'local_pending_transaction';
+            $result['pricing_error'] = null;
+            $result['fallback_reason'] = null;
+            $result['pricing_message'] = 'No vendor pricing lookup was made because the domain is already pending locally.';
+
+            return $result;
+        }
+
         $domain = $this->cleanDomain((string) ($result['domain'] ?? ''));
         $vendorPrice = $result['provider_register_price'] ?? null;
         $vendorCurrency = strtoupper(trim((string) ($result['currency'] ?? '')));
@@ -554,6 +580,56 @@ class DomainLookupController extends Controller
         return $lastResult ?: $this->providerUnknown('No configured domain availability provider.', 'none');
     }
 
+    /**
+     * Return the normalized domains already reserved by pending local sales.
+     *
+     * One INNER JOIN query handles the main lookup and all suggestions at once,
+     * avoiding one database query per TLD.
+     */
+    private function findPendingLocalDomains(array $domains): array
+    {
+        $normalizedDomains = collect($domains)
+            ->map(fn ($domain) => $this->cleanDomain((string) $domain))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($normalizedDomains->isEmpty()) {
+            return [];
+        }
+
+        return DB::table('sales_transactions as a')
+            ->join(
+                'sales_transaction_items as b',
+                'a.id',
+                '=',
+                'b.sales_transaction_id'
+            )
+            ->where('a.payment_status', 'pending')
+            ->where('b.item_type', 'product')
+            ->whereIn('b.name', $normalizedDomains->all())
+            ->pluck('b.name')
+            ->map(fn ($domain) => $this->cleanDomain((string) $domain))
+            ->filter()
+            ->unique()
+            ->mapWithKeys(fn ($domain) => [$domain => true])
+            ->all();
+    }
+
+    private function localPendingDomainResult(): array
+    {
+        return [
+            'available' => false,
+            'rrpCode' => 'LOCAL_PENDING',
+            'rrpText' => 'Domain is already included in a pending local sales transaction.',
+            'provider' => 'local_database',
+            'premium' => false,
+            'currency' => null,
+            'provider_register_price' => null,
+            'local_database_match' => true,
+        ];
+    }
+
     private function attachAvailabilityToSuggestionsFast(array $suggestions): array
     {
         $url = trim((string) config('services.enom.url'));
@@ -561,10 +637,25 @@ class DomainLookupController extends Controller
         $password = trim((string) config('services.enom.password'));
 
         $domainsToRequest = [];
+        $pendingLocalDomains = $this->findPendingLocalDomains(
+            collect($suggestions)->pluck('domain')->all()
+        );
 
         foreach ($suggestions as $key => $suggestion) {
             $domain = $this->cleanDomain($suggestion['domain']);
             $cacheKey = $this->availabilityCacheKey($domain);
+
+            // Local pending transactions take priority over cached registrar
+            // availability and are intentionally not cached because payment
+            // status may change at any time.
+            if (isset($pendingLocalDomains[$domain])) {
+                $this->applyAvailabilityResultToSuggestion(
+                    $suggestions,
+                    $key,
+                    $this->localPendingDomainResult()
+                );
+                continue;
+            }
 
             if (Cache::has($cacheKey)) {
                 $cached = Cache::get($cacheKey);
@@ -707,6 +798,7 @@ class DomainLookupController extends Controller
         $suggestions[$key]['premium'] = $result['premium'] ?? false;
         $suggestions[$key]['currency'] = $result['currency'] ?? null;
         $suggestions[$key]['provider_register_price'] = $result['provider_register_price'] ?? null;
+        $suggestions[$key]['local_database_match'] = (bool) ($result['local_database_match'] ?? false);
     }
 
     private function fallbackToWebnicIfNeeded(string $domain, array $currentResult): array
