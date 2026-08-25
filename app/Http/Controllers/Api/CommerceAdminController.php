@@ -56,6 +56,18 @@ class CommerceAdminController extends Controller
                     return $index === false ? 999 : $index;
                 })
                 ->values();
+        } elseif ($request->input('for') === 'billing_in_charge') {
+            $users->whereHas('roles', function ($query) {
+                $query->whereIn('name', [
+                    'billing_in_charge',
+                    'billing in charge',
+                    'billing-in-charge',
+                ]);
+            });
+            $records = $users
+                ->orderBy('fname')
+                ->orderBy('lname')
+                ->get();
         } else {
             $records = $users
                 ->orderBy('fname')
