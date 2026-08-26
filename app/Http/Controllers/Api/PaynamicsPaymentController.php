@@ -104,14 +104,40 @@ class PaynamicsPaymentController extends Controller
     /**
      * Return the customer after cancelling the hosted checkout.
      */
-    public function cancel(): RedirectResponse
-    {
-        /*
-         * Never change payment status from an unsigned browser cancellation.
-         * The signed server notification remains the source of truth.
-         */
+    public function cancel(Request $request): RedirectResponse
+{
+    $requestId = trim((string) $request->input('request_id'));
+
+    if ($requestId === '') {
+        Log::warning('PAYNAMICS CANCELLATION WITHOUT REQUEST ID');
+
         return $this->frontendRedirect('cancelled');
     }
+
+    /*
+     * Update only a pending transaction. This atomic condition prevents
+     * a late browser cancellation from overwriting an already successful
+     * payment notification.
+     */
+    $updated = PaynamicsPaymentReference::query()
+        ->where('request_id', $requestId)
+        ->where('status', 'pending')
+        ->update([
+            'status' => 'cancelled',
+        ]);
+
+    $status = PaynamicsPaymentReference::query()
+        ->where('request_id', $requestId)
+        ->value('status');
+
+    Log::info('PAYNAMICS CHECKOUT CANCELLED', [
+        'request_id' => $requestId,
+        'updated' => $updated === 1,
+        'status' => $status,
+    ]);
+
+    return $this->frontendRedirect($status ?: 'cancelled');
+}
 
     private function frontendRedirect(string $status): RedirectResponse
     {
