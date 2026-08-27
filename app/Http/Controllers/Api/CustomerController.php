@@ -314,6 +314,7 @@ class CustomerController extends Controller
     public function show(User $customer)
     {
         abort_unless($customer->hasRole(self::ROLE), 404);
+        $customer->loadMissing('owner');
 
         $activityLogs = DB::table('audits')
             ->leftJoin('users as actors', 'audits.user_id', '=', 'actors.id')
@@ -389,6 +390,16 @@ class CustomerController extends Controller
                 'date_registered' => optional($customer->created_at)->format('F d, Y'),
                 'is_active' => $customer->is_active,
                 'owner_id' => $customer->owner_id,
+                'owner' => $customer->owner ? [
+                    'id' => $customer->owner->id,
+                    'name' => trim(($customer->owner->fname ?? '') . ' ' . ($customer->owner->lname ?? ''))
+                        ?: ($customer->owner->email ?? null),
+                    'email' => $customer->owner->email,
+                ] : null,
+                'owner_name' => $customer->owner
+                    ? (trim(($customer->owner->fname ?? '') . ' ' . ($customer->owner->lname ?? ''))
+                        ?: ($customer->owner->email ?? null))
+                    : null,
                 'audits' => $activityLogs,
             ], $this->clientProfilePayload($customer)),
         ]);

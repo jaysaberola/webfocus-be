@@ -24,17 +24,23 @@ use Throwable;
 
 class SalesTransactionController extends Controller
 {
+    private function transactionRelations(): array
+    {
+        return [
+            'customer:id,fname,lname,email,mname,owner_id,billing_in_charge,contact_person',
+            'customer.owner:id,fname,lname,email',
+            'user:id,fname,lname,email',
+            'items',
+            'proposals',
+        ];
+    }
+
     public function index(Request $request)
     {
         $perPage = $request->integer('per_page', 10);
 
         $query = SalesTransaction::query()
-            ->with([
-                'customer:id,fname,lname,email',
-                'user:id,fname,lname,email',
-                'items',
-                'proposals',
-            ])
+            ->with($this->transactionRelations())
             ->when($request->search, function ($q) use ($request) {
                 $term = $request->search;
                 $q->where(function ($qq) use ($term) {
@@ -92,11 +98,7 @@ class SalesTransactionController extends Controller
 
         return response()->json([
             'message' => 'Sales transaction created successfully',
-            'data' => $transaction->load([
-                'customer:id,fname,lname,email',
-                'user:id,fname,lname,email',
-                'items',
-            ]),
+            'data' => $transaction->load($this->transactionRelations()),
         ], 201);
     }
 
@@ -199,11 +201,7 @@ class SalesTransactionController extends Controller
     public function show(SalesTransaction $salesTransaction)
     {
         return response()->json([
-            'data' => $salesTransaction->load([
-                'customer:id,fname,lname,email',
-                'items',
-                'proposals',
-            ]),
+            'data' => $salesTransaction->load($this->transactionRelations()),
         ]);
     }
 
@@ -402,11 +400,7 @@ class SalesTransactionController extends Controller
 
         return response()->json([
             'message' => 'Sales transaction updated successfully',
-            'data' => $salesTransaction->fresh()->load([
-                'customer:id,fname,lname,email',
-                'user:id,fname,lname,email',
-                'items',
-            ]),
+            'data' => $salesTransaction->fresh()->load($this->transactionRelations()),
         ]);
     }
 
