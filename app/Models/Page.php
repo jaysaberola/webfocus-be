@@ -35,6 +35,19 @@ class Page extends Model implements AuditableContract
         'content_type',
     ];
 
+    /**
+     * Full editor payloads exceed audits.old_values / new_values (TEXT)
+     * and crash save. Metadata (name, status, slug, etc.) is still audited.
+     */
+    protected $auditExclude = [
+        'contents',
+        'json',
+        'styles',
+        'grapes_html',
+        'grapes_css',
+        'grapes_js',
+    ];
+
     public function parent()
     {
         return $this->belongsTo(Page::class, 'parent_page_id');
