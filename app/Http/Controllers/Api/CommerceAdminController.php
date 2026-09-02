@@ -126,7 +126,7 @@ class CommerceAdminController extends Controller
             abort_unless(
                 app(ClientOwnerRotator::class)->isAllowedSalesAssignee($assignee),
                 422,
-                'Web design orders must be assigned to Myrna Glorioso or Michelle Durian.'
+                'Web design orders must be assigned to a Client Owner from the Customer Care list.'
             );
         }
 

@@ -112,9 +112,12 @@ class ClientOwnerRotator
             return true;
         }
 
-        return $this->rotatingSalesStaff()->contains(
-            fn (User $member) => (int) $member->id === (int) $user->id
-        );
+        $ownerEmails = collect(config('commerce.client_owners', []))
+            ->pluck('email')
+            ->filter()
+            ->map(fn ($email) => strtolower(trim((string) $email)));
+
+        return $ownerEmails->contains(strtolower((string) $user->email));
     }
 
     private function assignSalesStaff(SalesTransaction $transaction, ?int $explicitOwnerId): ?User
