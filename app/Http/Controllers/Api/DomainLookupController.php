@@ -605,7 +605,6 @@ class DomainLookupController extends Controller
                 '=',
                 'b.sales_transaction_id'
             )
-            ->where('a.payment_status', 'pending')
             ->where('b.item_type', 'product')
             ->whereIn('b.name', $normalizedDomains->all())
             ->pluck('b.name')
