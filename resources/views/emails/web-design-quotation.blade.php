@@ -47,8 +47,11 @@
       @endif
 
       <p style="margin:22px 0 0;color:#64748b;font-size:13px;">
-        Please set the package price in Commerce Admin → Orders using
-        <strong>Set Web Design Price</strong>.
+        @if ($assigneeName)
+          Auto-assigned to <strong>{{ $assigneeName }}</strong>. They should upload the proposal quotation in Commerce Admin → Deals.
+        @else
+          Assign an active Sales Staff member in Commerce Admin → Deals, then upload the proposal quotation.
+        @endif
       </p>
     </div>
   </div>

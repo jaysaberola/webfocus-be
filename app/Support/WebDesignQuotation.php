@@ -31,7 +31,11 @@ class WebDesignQuotation
 
             return str_contains($type, 'web_design')
                 || str_contains($type, 'webdesign')
+                || str_contains($type, 'web_development')
+                || str_contains($type, 'webdevelopment')
                 || str_contains($name, 'web design')
+                || str_contains($name, 'web development')
+                || str_contains($name, 'web-dev')
                 || str_contains($name, 'starter launch')
                 || str_contains($name, 'professional corporate')
                 || str_contains($name, 'e-commerce')
@@ -46,7 +50,8 @@ class WebDesignQuotation
 
         return str_contains($notes, 'pending quotation')
             || str_contains($notes, 'agency web design')
-            || str_contains($notes, 'custom web design');
+            || str_contains($notes, 'custom web design')
+            || str_contains($notes, 'web development');
     }
 
     public static function isPaid(SalesTransaction $row): bool

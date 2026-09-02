@@ -27,6 +27,7 @@ class SalesTransaction extends Model implements AuditableContract
         'notes',
         'transacted_at',
         'user_id',
+        'client_owner_id',
     ];
 
     protected $casts = [
@@ -61,6 +62,11 @@ class SalesTransaction extends Model implements AuditableContract
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function clientOwner()
+    {
+        return $this->belongsTo(User::class, 'client_owner_id');
     }
 
     public function items()

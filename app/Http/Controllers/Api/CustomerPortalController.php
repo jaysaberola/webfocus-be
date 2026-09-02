@@ -347,11 +347,10 @@ class CustomerPortalController extends Controller
             ),
         ]);
 
-        $assigneeId = $transaction->user_id;
-        $roles = ['sales_staff', 'sales_admin'];
+        $assigneeId = $transaction->client_owner_id ?: $transaction->user_id;
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             (int) $customer->id,
-            $roles,
+            ['sales_admin'],
             'admin:webdesign-signed:' . $transaction->id,
             'Signed Proposal Uploaded',
             trim(($customer->mname ?: $customer->full_name) ?: 'Client')
@@ -844,6 +843,8 @@ class CustomerPortalController extends Controller
             $status = 'Pending Quotation';
         } elseif ($paymentSubmitted) {
             $status = 'Awaiting Approval';
+        } elseif (WebDesignQuotation::isPaymentRequested($row)) {
+            $status = 'Pending Payment';
         } elseif ($daysUntilDue !== null && $daysUntilDue < 0) {
             $status = 'Overdue';
         } elseif ($daysUntilDue !== null && $daysUntilDue <= 7) {

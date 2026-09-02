@@ -14,6 +14,7 @@ use App\Support\ServiceCatalogLabelResolver;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
 use App\Support\WebDesignQuotation;
+use App\Services\ClientOwnerRotator;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
@@ -68,6 +69,21 @@ class CommerceAdminController extends Controller
                 ->orderBy('fname')
                 ->orderBy('lname')
                 ->get();
+        } elseif ($request->input('for') === 'sales_staff') {
+            $ownerEmails = collect(config('commerce.rotating_sales_staff', []))
+                ->filter()
+                ->values();
+            if ($ownerEmails->isEmpty()) {
+                $ownerEmails = collect(config('commerce.rotating_client_owners', []))->filter()->values();
+            }
+            $users->whereIn('email', $ownerEmails);
+            $records = $users
+                ->get()
+                ->sortBy(function (User $user) use ($ownerEmails) {
+                    $index = $ownerEmails->search(fn ($email) => strcasecmp((string) $email, (string) $user->email) === 0);
+                    return $index === false ? 999 : $index;
+                })
+                ->values();
         } else {
             $records = $users
                 ->orderBy('fname')
@@ -108,13 +124,17 @@ class CommerceAdminController extends Controller
         $salesTransaction->loadMissing('items');
         if (WebDesignQuotation::isWebDesign($salesTransaction)) {
             abort_unless(
-                $assignee->hasAnyRole(['sales_staff', 'sales_admin', 'admin']),
+                app(ClientOwnerRotator::class)->isAllowedSalesAssignee($assignee),
                 422,
-                'Web design orders must be assigned to active Sales Staff.'
+                'Web design orders must be assigned to Myrna Glorioso or Michelle Durian.'
             );
         }
 
-        $salesTransaction->update(['user_id' => $assignee->id]);
+        $assignment = ['user_id' => $assignee->id];
+        if (WebDesignQuotation::isWebDesign($salesTransaction)) {
+            $assignment['client_owner_id'] = $assignee->id;
+        }
+        $salesTransaction->update($assignment);
 
         if (WebDesignQuotation::isWebDesign($salesTransaction) && WebDesignQuotation::isPendingQuotation($salesTransaction)) {
             CustomerNotification::query()->updateOrCreate(
@@ -137,6 +157,7 @@ class CommerceAdminController extends Controller
         $fresh = $salesTransaction->fresh()->load([
             'customer:id,fname,lname,email',
             'user:id,fname,lname,email',
+            'clientOwner:id,fname,lname,email',
             'items',
         ]);
 
@@ -190,6 +211,20 @@ class CommerceAdminController extends Controller
         ]);
     }
 
+    public function nextRotatingClientOwner(Request $request, User $customer)
+    {
+        $this->resolveStaff($request);
+        abort_unless($customer->hasRole('customer'), 404, 'Customer not found.');
+
+        $rotator = app(ClientOwnerRotator::class);
+        $kind = strtolower(trim((string) $request->query('kind', '')));
+        $payload = in_array($kind, ['web_design', 'web_dev', 'web_development'], true)
+            ? $rotator->nextSalesStaffPayload()
+            : $rotator->nextOwnerPayload((int) $customer->id);
+
+        return response()->json(['data' => $payload]);
+    }
+
     public function dashboard(Request $request)
     {
         $this->resolveStaff($request);
@@ -199,7 +234,7 @@ class CommerceAdminController extends Controller
             ->whereIn('order_status', ['new', 'pending', 'processing'])
             ->latest('created_at')
             ->latest('id')
-            ->limit(8)
+            ->limit(40)
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapQueueOrder($row));
 
@@ -209,7 +244,7 @@ class CommerceAdminController extends Controller
             ->where('renew_at', '<=', now()->addDays(30))
             ->where('status', '!=', 'Expired')
             ->orderBy('renew_at')
-            ->limit(8)
+            ->limit(40)
             ->get()
             ->map(fn (CustomerService $row) => $this->mapExpiringService($row));
 
@@ -218,7 +253,7 @@ class CommerceAdminController extends Controller
             ->where('payment_status', '!=', 'paid')
             ->whereDate('transacted_at', '<=', now()->subDays(14))
             ->latest('transacted_at')
-            ->limit(8)
+            ->limit(40)
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapOverdueInvoice($row));
 

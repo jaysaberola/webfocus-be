@@ -84,6 +84,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/assignable-users', [CommerceAdminController::class, 'assignableUsers']);
         Route::patch('/sales-transactions/{salesTransaction}/assign', [CommerceAdminController::class, 'assignSalesTransaction']);
         Route::patch('/customers/{customer}/assign-owner', [CommerceAdminController::class, 'assignCustomerOwner']);
+        Route::get('/customers/{customer}/next-rotating-owner', [CommerceAdminController::class, 'nextRotatingClientOwner']);
     });
 
     // Commerce data shared by CMS modules and Commerce Control Center

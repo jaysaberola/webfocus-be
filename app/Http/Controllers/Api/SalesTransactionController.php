@@ -9,6 +9,7 @@ use App\Models\SalesTransaction;
 use App\Models\SalesTransactionProposal;
 use App\Models\Setting;
 use App\Models\User;
+use App\Services\ClientOwnerRotator;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
@@ -30,6 +31,7 @@ class SalesTransactionController extends Controller
             'customer:id,fname,lname,email,mname,owner_id,billing_in_charge,contact_person',
             'customer.owner:id,fname,lname,email',
             'user:id,fname,lname,email',
+            'clientOwner:id,fname,lname,email',
             'items',
             'proposals',
         ];
@@ -80,11 +82,19 @@ class SalesTransactionController extends Controller
         $validated['transacted_at'] = $this->normalizeTransactedAt(
             $validated['transacted_at'] ?? null
         );
+        $explicitOwnerId = isset($validated['client_owner_id'])
+            ? (int) $validated['client_owner_id']
+            : null;
+        unset($validated['client_owner_id']);
         $validated['user_id'] = $request->user()?->id;
 
-        $transaction = DB::transaction(function () use ($validated, $items) {
+        $transaction = DB::transaction(function () use ($validated, $items, $explicitOwnerId) {
             $transaction = SalesTransaction::create($validated);
             $this->syncItems($transaction, $items);
+            app(ClientOwnerRotator::class)->assign(
+                $transaction,
+                $explicitOwnerId ?: null
+            );
 
             return $transaction;
         });
@@ -94,7 +104,7 @@ class SalesTransactionController extends Controller
                 ->provisionFromTransaction($transaction->fresh(['items']));
         }
 
-        $this->notifyCustomerCareIfWebDesignQuotation($transaction->fresh(['items']));
+        $this->notifyCustomerCareIfWebDesignQuotation($transaction->fresh(['items', 'clientOwner', 'user']));
 
         return response()->json([
             'message' => 'Sales transaction created successfully',
@@ -161,10 +171,12 @@ class SalesTransactionController extends Controller
             $validated['transaction_no'],
             $items
         );
+        unset($validated['client_owner_id']);
 
         $transaction = DB::transaction(function () use ($validated, $items) {
             $transaction = SalesTransaction::create($validated);
             $this->syncItems($transaction, $items);
+            app(ClientOwnerRotator::class)->assign($transaction);
 
             return $transaction->fresh(['items']);
         });
@@ -216,7 +228,7 @@ class SalesTransactionController extends Controller
 
     public function uploadProposal(Request $request, SalesTransaction $salesTransaction)
     {
-        $this->assertSalesCanManageWebDesign($request);
+        $this->assertSalesCanManageWebDesign($request, $salesTransaction);
         abort_unless(WebDesignQuotation::isWebDesign($salesTransaction), 422, 'This order is not a web design quotation.');
         abort_unless(WebDesignQuotation::isPendingQuotation($salesTransaction), 422, 'Payment has already been requested for this quotation.');
 
@@ -263,7 +275,7 @@ class SalesTransactionController extends Controller
 
     public function proceedPayment(Request $request, SalesTransaction $salesTransaction)
     {
-        $this->assertSalesCanManageWebDesign($request);
+        $this->assertSalesCanManageWebDesign($request, $salesTransaction);
         abort_unless(WebDesignQuotation::isWebDesign($salesTransaction), 422, 'This order is not a web design quotation.');
         abort_unless(
             WebDesignQuotation::hasMarker($salesTransaction, WebDesignQuotation::PROPOSAL_SIGNED),
@@ -282,6 +294,7 @@ class SalesTransactionController extends Controller
                 WebDesignQuotation::PAYMENT_REQUESTED
             ),
             'payment_status' => 'pending',
+            'order_status' => 'pending',
         ]);
 
         if ($salesTransaction->customer_id) {
@@ -298,7 +311,7 @@ class SalesTransactionController extends Controller
 
         return response()->json([
             'message' => 'Payment requested. The client has been notified to upload proof of payment.',
-            'data' => $salesTransaction->fresh(['items', 'proposals', 'user', 'customer']),
+            'data' => $salesTransaction->fresh(['items', 'proposals', 'user', 'customer', 'clientOwner']),
         ]);
     }
 
@@ -384,10 +397,29 @@ class SalesTransactionController extends Controller
             );
         }
 
-        DB::transaction(function () use ($salesTransaction, $validated, $items) {
+        $explicitOwnerId = array_key_exists('client_owner_id', $validated)
+            ? ($validated['client_owner_id'] ? (int) $validated['client_owner_id'] : null)
+            : null;
+
+        DB::transaction(function () use ($salesTransaction, $validated, $items, $explicitOwnerId) {
             $salesTransaction->update($validated);
             if (is_array($items)) {
                 $this->syncItems($salesTransaction, $items);
+            }
+            if ($explicitOwnerId && $salesTransaction->customer_id) {
+                $salesTransaction->loadMissing('items');
+                if (WebDesignQuotation::isWebDesign($salesTransaction)) {
+                    $assignee = User::query()->with('roles')->find($explicitOwnerId);
+                    if (app(ClientOwnerRotator::class)->isAllowedSalesAssignee($assignee)) {
+                        $salesTransaction->update([
+                            'client_owner_id' => $explicitOwnerId,
+                            'user_id' => $explicitOwnerId,
+                        ]);
+                    }
+                } else {
+                    $salesTransaction->update(['client_owner_id' => $explicitOwnerId]);
+                    User::query()->whereKey($salesTransaction->customer_id)->update(['owner_id' => $explicitOwnerId]);
+                }
             }
         });
 
@@ -413,12 +445,30 @@ class SalesTransactionController extends Controller
         ]);
     }
 
-    private function assertSalesCanManageWebDesign(Request $request): void
+    private function assertSalesCanManageWebDesign(Request $request, SalesTransaction $transaction): void
     {
+        $user = $request->user();
+        abort_unless($user, 401);
+
+        if ($user->hasAnyRole(['sales_admin', 'admin'])) {
+            return;
+        }
+
+        $assignedId = (int) ($transaction->client_owner_id ?: $transaction->user_id);
+        if ($assignedId > 0) {
+            abort_unless(
+                $assignedId === (int) $user->id,
+                403,
+                'Only the assigned sales owner (Myrna or Michelle) can upload the proposal or proceed to payment for this order.'
+            );
+
+            return;
+        }
+
         abort_unless(
-            (bool) $request->user()?->hasAnyRole(['sales_staff', 'sales_admin', 'admin']),
+            app(ClientOwnerRotator::class)->isAllowedSalesAssignee($user),
             403,
-            'Only Sales Staff can upload proposals or request payment for web design orders.'
+            'Only Myrna Glorioso or Michelle Durian can upload the proposal or proceed to payment for this order.'
         );
     }
 
@@ -437,6 +487,7 @@ class SalesTransactionController extends Controller
             'customer_id' => ['nullable', 'integer', 'exists:users,id'],
             'customer_name' => ['nullable', 'string', 'max:255'],
             'customer_email' => ['nullable', 'email', 'max:255'],
+            'client_owner_id' => ['nullable', 'integer', 'exists:users,id'],
             'subtotal' => ['required', 'numeric', 'min:0'],
             'discount_total' => ['nullable', 'numeric', 'min:0'],
             'tax_total' => ['nullable', 'numeric', 'min:0'],
@@ -630,29 +681,16 @@ class SalesTransactionController extends Controller
 
     private function notifyCustomerCareIfWebDesignQuotation(SalesTransaction $transaction): void
     {
-        $notes = (string) ($transaction->notes ?? '');
-        $items = $transaction->items ?? collect();
-        $isQuotation = str_contains($notes, 'Pricing: Pending Quotation')
-            || (
-                ! str_contains($notes, 'Pricing: Set by Sales')
-                && (float) $transaction->grand_total <= 0
-                && $items->contains(function ($item) {
-                    $type = strtolower((string) ($item->item_type ?? ''));
-                    $name = strtolower((string) ($item->name ?? ''));
+        $transaction->loadMissing(['items', 'clientOwner.roles', 'user.roles']);
 
-                    return str_contains($type, 'web_design')
-                        || str_contains($type, 'webdesign')
-                        || str_contains($name, 'web design')
-                        || str_contains($name, 'starter launch')
-                        || str_contains($name, 'professional corporate')
-                        || str_contains($name, 'e-commerce');
-                })
-            );
-
-        if (! $isQuotation) {
+        if (
+            ! WebDesignQuotation::isWebDesign($transaction)
+            || ! WebDesignQuotation::isPendingQuotation($transaction)
+        ) {
             return;
         }
 
+        $items = $transaction->items ?? collect();
         $itemNames = $items->pluck('name')->filter()->take(3)->implode(', ');
         $clientLabel = $transaction->customer_name
             ?: ($transaction->customer?->full_name ?? 'Client');
@@ -664,29 +702,59 @@ class SalesTransactionController extends Controller
                 'body' => 'Your web design quotation request '
                     . $transaction->transaction_no
                     . ($itemNames ? " ({$itemNames})" : '')
-                    . ' was sent to Sales for pricing.',
+                    . ' was sent to Sales. Status is Pending Quotation until the proposal is ready.',
                 'type' => 'general',
-                'action_url' => '/public/dashboard?tab=orders',
+                'action_url' => '/public/dashboard?tab=billing',
             ]);
         }
 
+        $assignee = $transaction->clientOwner ?: $transaction->user;
+        $assigneeIsSales = app(ClientOwnerRotator::class)->isAllowedSalesAssignee($assignee);
+        $assigneeName = $assigneeIsSales
+            ? (trim(($assignee->fname ?? '') . ' ' . ($assignee->lname ?? '')) ?: ($assignee->email ?? 'Sales Staff'))
+            : null;
+
+        $staffBody = "{$clientLabel} submitted a Pending Quotation checkout"
+            . ($itemNames ? " for {$itemNames}" : '')
+            . " ({$transaction->transaction_no}). "
+            . ($assigneeName
+                ? "Auto-assigned to {$assigneeName}. They should upload the proposal quotation."
+                : 'Assign Myrna Glorioso or Michelle Durian and upload the proposal quotation.');
+
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             $transaction->customer_id ? (int) $transaction->customer_id : null,
-            ['sales_admin', 'sales_staff'],
+            ['sales_admin', 'customer_care'],
             'admin:webdesign-quotation:' . $transaction->id,
             'Web Design Quotation Request',
-            "{$clientLabel} submitted a Pending Quotation checkout"
-                . ($itemNames ? " for {$itemNames}" : '')
-                . " ({$transaction->transaction_no}). Assign a Sales Staff member and upload the proposal quotation.",
+            $staffBody,
             'web_design_quotation',
             '/public/commerce-admin?tab=orders',
             false,
         );
 
+        if ($assigneeIsSales) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $assignee->id,
+                    'reference_key' => 'admin:webdesign-assigned:' . $transaction->id,
+                ],
+                [
+                    'title' => 'New Web Design Assignment',
+                    'body' => 'You were assigned web design order '
+                        . $transaction->transaction_no
+                        . ($itemNames ? " ({$itemNames})" : '')
+                        . '. Upload the proposal quotation in Orders.',
+                    'type' => 'web_design_quotation',
+                    'action_url' => '/public/commerce-admin?tab=orders',
+                    'read_at' => null,
+                ]
+            );
+        }
+
         $to = Setting::query()->value('email') ?: 'customercare@webfocus.ph';
 
         try {
-            Mail::to($to)->send(new WebDesignQuotationMail($transaction));
+            Mail::to($to)->send(new WebDesignQuotationMail($transaction, $assigneeName));
         } catch (Throwable $exception) {
             report($exception);
         }
