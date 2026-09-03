@@ -113,6 +113,72 @@ class CustomerPortalController extends Controller
         return response()->json(['data' => $orders]);
     }
 
+    public function cancelOrder(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+
+        $salesTransaction->loadMissing('items');
+        $status = CustomerPortalProvisioner::resolveServiceStatus($salesTransaction);
+        abort_if(
+            $status === CustomerPortalProvisioner::STATUS_CANCELLED,
+            422,
+            'This order is already cancelled.'
+        );
+        abort_if(
+            in_array($status, [
+                CustomerPortalProvisioner::STATUS_ACTIVE,
+                CustomerPortalProvisioner::STATUS_PROVISIONING,
+            ], true),
+            422,
+            'Paid or active orders cannot be cancelled here. Please contact support.'
+        );
+
+        $notes = trim((string) $salesTransaction->notes);
+        $cancelLine = 'Customer cancelled this order from My Orders on ' . now()->toDateString() . '.';
+        $salesTransaction->update([
+            'order_status' => 'cancelled',
+            'payment_status' => in_array(strtolower((string) $salesTransaction->payment_status), ['paid', 'completed', 'success'], true)
+                ? $salesTransaction->payment_status
+                : 'cancelled',
+            'notes' => $notes === '' ? $cancelLine : $notes . "\n" . $cancelLine,
+        ]);
+
+        CustomerService::query()
+            ->where('sales_transaction_id', $salesTransaction->id)
+            ->update(['status' => CustomerPortalProvisioner::STATUS_CANCELLED]);
+
+        $orderNo = $salesTransaction->transaction_no;
+        $clientLabel = trim(($customer->mname ?: '') !== ''
+            ? (string) $customer->mname
+            : trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''))) ?: ($customer->email ?? 'Client');
+
+        CustomerNotification::create([
+            'customer_id' => $customer->id,
+            'title' => 'Order Cancelled',
+            'body' => 'You cancelled order ' . $orderNo . '.',
+            'type' => 'order',
+            'action_url' => '/public/dashboard?tab=orders',
+        ]);
+
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $customer->id,
+            ['finance_admin', 'sales_admin', 'sales_staff', 'admin', 'customer_care'],
+            'admin:order-cancelled:' . $salesTransaction->id,
+            'Customer Cancelled an Order',
+            "{$clientLabel} cancelled order {$orderNo}.",
+            'order',
+            '/public/commerce-admin?tab=orders',
+        );
+
+        app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+
+        return response()->json([
+            'message' => 'Order cancelled.',
+            'data' => $this->mapOrder($salesTransaction->fresh('items')),
+        ]);
+    }
+
     public function billing(Request $request)
     {
         $customer = $this->resolveCustomer($request);
@@ -805,19 +871,31 @@ class CustomerPortalController extends Controller
         ])->values()->all();
 
         $planLabel = TransactionLabelResolver::planLabel($row->items, $firstItem?->name);
+        $status = CustomerPortalProvisioner::resolveServiceStatus($row);
+        $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
+        $domain = $row->items
+            ->pluck('name')
+            ->first(fn ($name) => TransactionLabelResolver::looksLikeDomain($name));
 
         return [
             'id' => $row->transaction_no,
+            'recordId' => $row->id,
             'invoiceId' => $this->invoiceId($row),
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
             'plan' => $planLabel,
+            'domain' => $domain,
             'date' => TransactionLabelResolver::issuedDateFrom($row->transacted_at),
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'total' => WebDesignQuotation::displayAmount($row),
-            'status' => CustomerPortalProvisioner::resolveServiceStatus($row),
+            'status' => $status,
+            'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
             'gateway' => $this->extractPaymentMethod($row->notes),
+            'canCancel' => in_array($status, [
+                CustomerPortalProvisioner::STATUS_PENDING,
+                CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL,
+            ], true),
             'items' => $items,
         ];
     }

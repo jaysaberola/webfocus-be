@@ -16,6 +16,7 @@ class CustomerPortalProvisioner
     public const STATUS_AWAITING_APPROVAL = 'Awaiting Approval';
     public const STATUS_PENDING = 'Pending Request';
     public const STATUS_EXPIRED = 'Expired';
+    public const STATUS_CANCELLED = 'Cancelled';
 
     public function provisionFromTransaction(SalesTransaction $transaction): void
     {
@@ -137,7 +138,11 @@ class CustomerPortalProvisioner
         $paid = in_array($payment, ['paid', 'completed', 'success'], true);
         $live = in_array($order, ['completed', 'active', 'delivered', 'live'], true);
 
-        if (in_array($order, ['cancelled', 'canceled', 'expired', 'failed'], true)) {
+        if (in_array($order, ['cancelled', 'canceled'], true) || in_array($payment, ['cancelled', 'canceled'], true)) {
+            return self::STATUS_CANCELLED;
+        }
+
+        if (in_array($order, ['expired', 'failed'], true)) {
             return self::STATUS_EXPIRED;
         }
 

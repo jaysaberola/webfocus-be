@@ -50,6 +50,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/overview', [CustomerPortalController::class, 'overview']);
         Route::get('/services', [CustomerPortalController::class, 'services']);
         Route::get('/orders', [CustomerPortalController::class, 'orders']);
+        Route::post('/orders/{salesTransaction}/cancel', [CustomerPortalController::class, 'cancelOrder']);
         Route::get('/billing', [CustomerPortalController::class, 'billing']);
         Route::post('/billing/pay', [CustomerPortalController::class, 'payInvoice']);
         Route::post('/billing/add-funds', [CustomerPortalController::class, 'addFunds']);
