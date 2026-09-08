@@ -16,7 +16,6 @@ use App\Services\PaynamicsService;
 use App\Support\StorageUrl;
 use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
-use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -173,6 +172,14 @@ class SalesTransactionController extends Controller
             $items
         );
         unset($validated['client_owner_id']);
+
+        $transaction = DB::transaction(function () use ($validated, $items) {
+            $transaction = SalesTransaction::create($validated);
+            $this->syncItems($transaction, $items);
+            app(ClientOwnerRotator::class)->assign($transaction);
+
+            return $transaction->fresh(['items']);
+        });
 
         try {
             [$transaction, $gateway] = DB::transaction(function () use (

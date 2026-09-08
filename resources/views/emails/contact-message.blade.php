@@ -86,6 +86,15 @@
         {{ $data['contact_number'] }}
       </div>
 
+      @if (!empty($data['preferred_services']))
+      <div style="margin-bottom: 14px;">
+        <strong style="color: #374151; min-width: 120px; display: inline-block;">
+          Preferred Services:
+        </strong>
+        {{ implode(', ', $data['preferred_services']) }}
+      </div>
+      @endif
+
       <div style="margin-top: 18px;">
         <strong style="color: #374151;">
           Message:

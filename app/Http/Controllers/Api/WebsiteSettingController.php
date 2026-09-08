@@ -48,6 +48,7 @@ class WebsiteSettingController extends Controller
             'company_name',
             'company_logo',
             'website_favicon',
+            'google_recaptcha_sitekey',
         ])->first();
 
         return response()->json([
@@ -55,6 +56,7 @@ class WebsiteSettingController extends Controller
             'company_name' => $setting?->company_name,
             'company_logo' => $setting?->company_logo,
             'website_favicon' => $setting?->website_favicon,
+            'google_recaptcha_sitekey' => $setting?->google_recaptcha_sitekey,
         ]);
     }
 
@@ -97,6 +99,7 @@ class WebsiteSettingController extends Controller
             'google_analytics',
             'google_map',
             'google_recaptcha_sitekey',
+            'google_recaptcha_secret',
             'nav_alignment',
         ]));
 

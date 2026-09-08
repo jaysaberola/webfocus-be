@@ -5,13 +5,20 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
+use App\Models\CustomerProfileChangeRequest;
 use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Support\ServiceCatalogLabelResolver;
+use App\Support\TransactionLabelResolver;
+use App\Support\StorageUrl;
+use App\Support\WebDesignQuotation;
+use App\Services\ClientOwnerRotator;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
@@ -26,6 +33,198 @@ class CommerceAdminController extends Controller
         return $user;
     }
 
+    public function assignableUsers(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $users = User::query()
+            ->with('roles')
+            ->where('is_active', true)
+            ->whereDoesntHave('roles', function ($query) {
+                $query->where('name', 'customer');
+            });
+
+        if ($request->input('for') === 'client_owner') {
+            $ownerEmails = collect(config('commerce.client_owners', []))
+                ->pluck('email')
+                ->filter()
+                ->values();
+            $users->whereIn('email', $ownerEmails);
+            $records = $users
+                ->get()
+                ->sortBy(function (User $user) use ($ownerEmails) {
+                    $index = $ownerEmails->search(fn ($email) => strcasecmp((string) $email, (string) $user->email) === 0);
+                    return $index === false ? 999 : $index;
+                })
+                ->values();
+        } elseif ($request->input('for') === 'billing_in_charge') {
+            $users->whereHas('roles', function ($query) {
+                $query->whereIn('name', [
+                    'billing_in_charge',
+                    'billing in charge',
+                    'billing-in-charge',
+                ]);
+            });
+            $records = $users
+                ->orderBy('fname')
+                ->orderBy('lname')
+                ->get();
+        } elseif ($request->input('for') === 'sales_staff') {
+            $ownerEmails = collect(config('commerce.rotating_sales_staff', []))
+                ->filter()
+                ->values();
+            if ($ownerEmails->isEmpty()) {
+                $ownerEmails = collect(config('commerce.rotating_client_owners', []))->filter()->values();
+            }
+            $users->whereIn('email', $ownerEmails);
+            $records = $users
+                ->get()
+                ->sortBy(function (User $user) use ($ownerEmails) {
+                    $index = $ownerEmails->search(fn ($email) => strcasecmp((string) $email, (string) $user->email) === 0);
+                    return $index === false ? 999 : $index;
+                })
+                ->values();
+        } else {
+            $records = $users
+                ->orderBy('fname')
+                ->orderBy('lname')
+                ->get();
+        }
+
+        $payload = $records
+            ->map(fn (User $user) => [
+                'id' => $user->id,
+                'name' => trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')) ?: ($user->email ?? 'User'),
+                'email' => $user->email,
+                'role' => $user->getRoleNames()->first(),
+                'roles' => $user->getRoleNames()->values()->all(),
+            ])
+            ->values();
+
+        return response()->json(['data' => $payload]);
+    }
+
+    public function assignSalesTransaction(Request $request, SalesTransaction $salesTransaction)
+    {
+        $staff = $this->resolveStaff($request);
+        abort_unless(
+            $staff->hasAnyRole(['customer_care', 'finance_admin', 'sales_admin', 'admin']),
+            403,
+            'Only Customer Care, Finance Admin, or Sales Admin can assign transactions.'
+        );
+
+        $validated = $request->validate([
+            'user_id' => ['required', 'integer', 'exists:users,id'],
+        ]);
+
+        $assignee = User::query()->with('roles')->findOrFail($validated['user_id']);
+        abort_unless((bool) $assignee->is_active, 422, 'Selected user is not active.');
+        abort_if($assignee->hasRole('customer'), 422, 'Customer accounts cannot be assigned to transactions.');
+
+        $salesTransaction->loadMissing('items');
+        if (WebDesignQuotation::isWebDesign($salesTransaction)) {
+            abort_unless(
+                app(ClientOwnerRotator::class)->isAllowedSalesAssignee($assignee),
+                422,
+                'Web design orders must be assigned to a Client Owner from the Customer Care list.'
+            );
+        }
+
+        $assignment = ['user_id' => $assignee->id];
+        if (WebDesignQuotation::isWebDesign($salesTransaction)) {
+            $assignment['client_owner_id'] = $assignee->id;
+        }
+        $salesTransaction->update($assignment);
+
+        if (WebDesignQuotation::isWebDesign($salesTransaction) && WebDesignQuotation::isPendingQuotation($salesTransaction)) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $assignee->id,
+                    'reference_key' => 'admin:webdesign-assigned:' . $salesTransaction->id,
+                ],
+                [
+                    'title' => 'New Web Design Assignment',
+                    'body' => 'You were assigned web design order '
+                        . $salesTransaction->transaction_no
+                        . '. Upload the proposal quotation in Orders.',
+                    'type' => 'web_design_quotation',
+                    'action_url' => '/public/commerce-admin?tab=orders',
+                    'read_at' => null,
+                ]
+            );
+        }
+
+        $fresh = $salesTransaction->fresh()->load([
+            'customer:id,fname,lname,email',
+            'user:id,fname,lname,email',
+            'clientOwner:id,fname,lname,email',
+            'items',
+        ]);
+
+        return response()->json([
+            'message' => 'Transaction assigned successfully.',
+            'data' => $fresh,
+        ]);
+    }
+
+    public function assignCustomerOwner(Request $request, User $customer)
+    {
+        $staff = $this->resolveStaff($request);
+        abort_unless(
+            $staff->hasAnyRole(['customer_care', 'admin']),
+            403,
+            'Only Customer Care can assign client owners.'
+        );
+        abort_unless($customer->hasRole('customer'), 404, 'Customer not found.');
+
+        $validated = $request->validate([
+            'owner_id' => ['nullable', 'integer', 'exists:users,id'],
+        ]);
+
+        $ownerId = $validated['owner_id'] ?? null;
+        if ($ownerId) {
+            $assignee = User::query()->with('roles')->findOrFail($ownerId);
+            abort_unless((bool) $assignee->is_active, 422, 'Selected user is not active.');
+            abort_if($assignee->hasRole('customer'), 422, 'Customer accounts cannot be assigned as client owners.');
+            abort_if($assignee->id === $customer->id, 422, 'A client cannot be assigned as their own owner.');
+        }
+
+        $customer->update(['owner_id' => $ownerId]);
+        $fresh = $customer->fresh()->load(['owner:id,fname,lname,email']);
+        $owner = $fresh->owner;
+        $ownerName = $owner
+            ? (trim(($owner->fname ?? '') . ' ' . ($owner->lname ?? '')) ?: ($owner->email ?? null))
+            : null;
+
+        return response()->json([
+            'message' => $ownerId ? 'Client owner assigned successfully.' : 'Client owner unassigned.',
+            'data' => [
+                'id' => $fresh->id,
+                'owner_id' => $fresh->owner_id,
+                'owner' => $owner ? [
+                    'id' => $owner->id,
+                    'name' => $ownerName,
+                    'email' => $owner->email,
+                ] : null,
+                'owner_name' => $ownerName,
+            ],
+        ]);
+    }
+
+    public function nextRotatingClientOwner(Request $request, User $customer)
+    {
+        $this->resolveStaff($request);
+        abort_unless($customer->hasRole('customer'), 404, 'Customer not found.');
+
+        $rotator = app(ClientOwnerRotator::class);
+        $kind = strtolower(trim((string) $request->query('kind', '')));
+        $payload = in_array($kind, ['web_design', 'web_dev', 'web_development'], true)
+            ? $rotator->nextSalesStaffPayload()
+            : $rotator->nextOwnerPayload((int) $customer->id);
+
+        return response()->json(['data' => $payload]);
+    }
+
     public function dashboard(Request $request)
     {
         $this->resolveStaff($request);
@@ -33,8 +232,9 @@ class CommerceAdminController extends Controller
         $newOrders = SalesTransaction::query()
             ->with(['customer:id,fname,lname,email', 'items'])
             ->whereIn('order_status', ['new', 'pending', 'processing'])
-            ->latest('transacted_at')
-            ->limit(8)
+            ->latest('created_at')
+            ->latest('id')
+            ->limit(40)
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapQueueOrder($row));
 
@@ -44,7 +244,7 @@ class CommerceAdminController extends Controller
             ->where('renew_at', '<=', now()->addDays(30))
             ->where('status', '!=', 'Expired')
             ->orderBy('renew_at')
-            ->limit(8)
+            ->limit(40)
             ->get()
             ->map(fn (CustomerService $row) => $this->mapExpiringService($row));
 
@@ -53,19 +253,26 @@ class CommerceAdminController extends Controller
             ->where('payment_status', '!=', 'paid')
             ->whereDate('transacted_at', '<=', now()->subDays(14))
             ->latest('transacted_at')
-            ->limit(8)
+            ->limit(40)
             ->get()
             ->map(fn (SalesTransaction $row) => $this->mapOverdueInvoice($row));
 
-        $pendingProofs = CustomerPaymentProof::query()->where('status', 'Pending Review')->count();
+        $pendingProofs = $this->pendingPaymentProofCount();
+        $pendingProfileChanges = CustomerProfileChangeRequest::query()
+            ->where('status', 'Pending Review')
+            ->count();
+        $pendingQuotations = $this->pendingWebDesignQuotationsQuery()->count();
         $openTickets = CustomerSupportTicket::query()->whereIn('status', ['Open', 'In Progress'])->count();
         $activeClients = User::role('customer')->where('is_active', true)->count();
-        $activeServices = CustomerService::query()->where('status', 'Active')->count();
+        $activeServices = CustomerService::query()
+            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
+            ->count();
 
         return response()->json([
             'data' => [
                 'counts' => [
-                    'pendingApprovals' => $pendingProofs,
+                    'pendingApprovals' => $pendingProofs + $pendingProfileChanges,
+                    'pendingQuotations' => $pendingQuotations,
                     'openTickets' => $openTickets,
                     'activeClients' => $activeClients,
                     'activeServices' => $activeServices,
@@ -74,6 +281,48 @@ class CommerceAdminController extends Controller
                 'expiringServices' => $expiringServices,
                 'overdueInvoices' => $overdueInvoices,
             ],
+        ]);
+    }
+
+    public function approvals(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $status = $request->input('status', 'Pending Review');
+        $this->collapseDuplicatePendingPaymentProofs();
+
+        $proofRows = CustomerPaymentProof::query()
+            ->with(['customer:id,fname,lname,email', 'salesTransaction.items'])
+            ->when($status !== 'all', fn ($q) => $q->where('status', $status))
+            ->latest()
+            ->get()
+            ->unique(function (CustomerPaymentProof $proof) {
+                if ($proof->status !== 'Pending Review') {
+                    return 'id:' . $proof->id;
+                }
+
+                return 'pending:' . ($proof->sales_transaction_id ?: $proof->invoice_id);
+            })
+            ->values()
+            ->map(fn (CustomerPaymentProof $proof) => array_merge(
+                $this->mapAdminPaymentProof($proof),
+                ['kind' => 'payment_proof']
+            ));
+
+        $profileRows = CustomerProfileChangeRequest::query()
+            ->with('customer:id,fname,lname,email,mname')
+            ->when($status !== 'all', fn ($q) => $q->where('status', $status))
+            ->latest()
+            ->get()
+            ->map(fn (CustomerProfileChangeRequest $row) => $this->mapAdminProfileChangeRequest($row));
+
+        $merged = $proofRows
+            ->concat($profileRows)
+            ->sortByDesc(fn (array $row) => $row['submittedAt'] ?? '')
+            ->values();
+
+        return response()->json([
+            'data' => $merged,
         ]);
     }
 
@@ -90,7 +339,10 @@ class CommerceAdminController extends Controller
             ->paginate($request->integer('per_page', 20));
 
         return response()->json([
-            'data' => $rows->through(fn (CustomerPaymentProof $proof) => $this->mapAdminPaymentProof($proof)),
+            'data' => $rows->through(fn (CustomerPaymentProof $proof) => array_merge(
+                $this->mapAdminPaymentProof($proof),
+                ['kind' => 'payment_proof']
+            )),
             'meta' => [
                 'current_page' => $rows->currentPage(),
                 'last_page' => $rows->lastPage(),
@@ -137,6 +389,102 @@ class CommerceAdminController extends Controller
         return response()->json([
             'message' => 'Payment proof verified and invoice credited.',
             'data' => $this->mapAdminPaymentProof($paymentProof->fresh(['customer', 'salesTransaction.items'])),
+        ]);
+    }
+
+    public function approveProfileChange(Request $request, CustomerProfileChangeRequest $profileChangeRequest)
+    {
+        $this->resolveStaff($request);
+        abort_unless(
+            $profileChangeRequest->status === 'Pending Review',
+            422,
+            'Only pending profile change requests can be approved.'
+        );
+
+        $customer = $profileChangeRequest->customer;
+        abort_unless($customer, 422, 'Customer record not found for this profile change request.');
+
+        $payload = $profileChangeRequest->requested_payload ?? [];
+
+        $updates = [
+            'fname' => $payload['fname'] ?? $customer->fname,
+            'lname' => $payload['lname'] ?? $customer->lname,
+            'mobile' => $payload['mobile'] ?? $customer->mobile,
+            'mname' => $payload['mname'] ?? $customer->mname,
+            'address_country' => $payload['address_country'] ?? $customer->address_country,
+            'address_region' => $payload['address_region'] ?? $customer->address_region,
+            'address_province' => $payload['address_province'] ?? $customer->address_province,
+            'address_city' => $payload['address_city'] ?? $customer->address_city,
+            'address_street' => $payload['address_street'] ?? $customer->address_street,
+            'address_zip' => $payload['address_zip'] ?? $customer->address_zip,
+        ];
+
+        if (!empty($payload['avatar_path'])) {
+            $updates['avatar'] = $this->resolveApprovedProfileAvatarPath(
+                $customer,
+                $payload['avatar_path']
+            );
+        }
+
+        $customer->update($updates);
+
+        $profileChangeRequest->update([
+            'status' => 'Approved',
+            'reviewed_at' => now(),
+        ]);
+
+        CustomerNotification::create([
+            'customer_id' => $customer->id,
+            'title' => 'Profile Changes Approved',
+            'body' => 'Your profile update request ' . $profileChangeRequest->request_no . ' has been approved and applied.',
+            'type' => 'account',
+            'action_url' => '/public/dashboard?tab=account',
+        ]);
+
+        app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+
+        return response()->json([
+            'message' => 'Profile change approved and applied.',
+            'data' => $this->mapAdminProfileChangeRequest($profileChangeRequest->fresh('customer')),
+        ]);
+    }
+
+    public function rejectProfileChange(Request $request, CustomerProfileChangeRequest $profileChangeRequest)
+    {
+        $this->resolveStaff($request);
+        abort_unless(
+            $profileChangeRequest->status === 'Pending Review',
+            422,
+            'Only pending profile change requests can be rejected.'
+        );
+
+        $validated = $request->validate([
+            'reason' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $this->cleanupPendingProfileAvatar($profileChangeRequest->requested_payload ?? []);
+
+        $profileChangeRequest->update([
+            'status' => 'Rejected',
+            'reviewed_at' => now(),
+            'notes' => trim(($profileChangeRequest->notes ?? '') . ($validated['reason'] ?? '' ? "\nRejected: {$validated['reason']}" : '')),
+        ]);
+
+        if ($profileChangeRequest->customer_id) {
+            CustomerNotification::create([
+                'customer_id' => $profileChangeRequest->customer_id,
+                'title' => 'Profile Changes Need Review',
+                'body' => 'Your profile update request ' . $profileChangeRequest->request_no . ' could not be approved. Please review your details or contact support.',
+                'type' => 'account',
+                'action_url' => '/public/dashboard?tab=account',
+            ]);
+
+            app(CustomerPortalNotificationSync::class)->syncForCustomer($profileChangeRequest->customer_id);
+        }
+
+        return response()->json([
+            'message' => 'Profile change rejected.',
+            'data' => $this->mapAdminProfileChangeRequest($profileChangeRequest->fresh('customer')),
         ]);
     }
 
@@ -221,8 +569,30 @@ class CommerceAdminController extends Controller
         $this->resolveStaff($request);
 
         $rows = CustomerService::query()
-            ->with(['customer:id,fname,lname,email', 'salesTransaction'])
+            ->with(['customer:id,fname,lname,email,mname', 'salesTransaction'])
+            ->when($request->filled('customer_id'), fn ($q) => $q->where('customer_id', $request->integer('customer_id')))
             ->when($request->status, fn ($q) => $q->where('status', $request->status))
+            ->when($request->filled('plan'), function ($q) use ($request) {
+                $plan = trim((string) $request->input('plan'));
+                $q->where(function ($qq) use ($plan) {
+                    $qq->where('plan', 'like', "%{$plan}%")
+                        ->orWhere('title', 'like', "%{$plan}%");
+                });
+            })
+            ->when($request->filled('search'), function ($q) use ($request) {
+                $term = trim((string) $request->input('search'));
+                $q->where(function ($qq) use ($term) {
+                    $qq->where('plan', 'like', "%{$term}%")
+                        ->orWhere('title', 'like', "%{$term}%")
+                        ->orWhere('category', 'like', "%{$term}%")
+                        ->orWhereHas('customer', function ($customerQuery) use ($term) {
+                            $customerQuery->where('fname', 'like', "%{$term}%")
+                                ->orWhere('lname', 'like', "%{$term}%")
+                                ->orWhere('email', 'like', "%{$term}%")
+                                ->orWhere('mname', 'like', "%{$term}%");
+                        });
+                });
+            })
             ->latest()
             ->paginate($request->integer('per_page', 20));
 
@@ -236,10 +606,287 @@ class CommerceAdminController extends Controller
         ]);
     }
 
+    public function notifications(Request $request)
+    {
+        $staff = $this->resolveStaff($request);
+        $perPage = $request->integer('per_page', 50);
+        $isSales = $staff->hasAnyRole(['sales_admin', 'sales_staff']);
+
+        // Web design quotations are Sales-only.
+        $clientAlerts = collect();
+        if ($isSales) {
+            $clientAlerts = $this->pendingWebDesignQuotationsQuery()
+                ->with(['customer:id,fname,lname,email,mname,owner_id', 'items'])
+                ->latest('transacted_at')
+                ->latest('id')
+                ->limit($perPage)
+                ->get()
+                ->map(fn (SalesTransaction $row) => $this->mapWebDesignQuotationAlert($row))
+                ->values();
+        }
+
+        // Staff inbox copies for this signed-in user (quotations, proofs, tickets, profile changes).
+        $inboxAlerts = CustomerNotification::query()
+            ->where('customer_id', $staff->id)
+            ->where(function ($query) {
+                $query->where('reference_key', 'like', 'admin:%')
+                    ->orWhereIn('type', [
+                        'web_design_quotation',
+                        'payment_proof',
+                        'profile_change',
+                        'support_ticket',
+                    ]);
+            })
+            ->latest()
+            ->limit($perPage)
+            ->get()
+            ->map(function (CustomerNotification $row) {
+                $kind = match (true) {
+                    str_starts_with((string) $row->reference_key, 'admin:payment-proof:') => 'payment_proof',
+                    str_starts_with((string) $row->reference_key, 'admin:profile-change:') => 'profile_change',
+                    str_starts_with((string) $row->reference_key, 'admin:support-ticket:') => 'support_ticket',
+                    str_starts_with((string) $row->reference_key, 'admin:webdesign-quotation:') => 'web_design_quotation',
+                    default => (string) ($row->type ?: 'general'),
+                };
+
+                $status = match ($kind) {
+                    'payment_proof' => 'Pending Review',
+                    'profile_change' => 'Pending Review',
+                    'support_ticket' => 'Open',
+                    'web_design_quotation' => 'Needs Pricing',
+                    default => 'Unread',
+                };
+
+                $actionUrl = $row->action_url ?: match ($kind) {
+                    'payment_proof', 'profile_change' => '/public/commerce-admin?tab=approvals',
+                    'support_ticket' => '/public/commerce-admin?tab=helpdesk',
+                    default => '/public/commerce-admin?tab=orders',
+                };
+
+                return [
+                    'id' => (int) $row->id,
+                    'kind' => $kind,
+                    'title' => $row->title,
+                    'desc' => $row->body,
+                    'date' => $this->formatAppDateTime($row->created_at),
+                    'audience' => 'Assigned / Role Inbox',
+                    'email' => null,
+                    'transactionNo' => null,
+                    'status' => $status,
+                    'actionUrl' => $actionUrl,
+                    'unread' => $row->read_at === null,
+                ];
+            })
+            // Hide web design quotation inbox items from non-Sales staff.
+            ->filter(function (array $row) use ($isSales) {
+                if (($row['kind'] ?? '') === 'web_design_quotation') {
+                    return $isSales;
+                }
+
+                return true;
+            })
+            ->values();
+
+        // Deduplicate by title+desc+kind while preferring live quotation rows.
+        $merged = $clientAlerts
+            ->concat($inboxAlerts)
+            ->unique(function (array $row) {
+                return ($row['kind'] ?? '') . '|' . ($row['title'] ?? '') . '|' . ($row['desc'] ?? '');
+            })
+            ->values()
+            ->take($perPage);
+
+        return response()->json([
+            'data' => [
+                'clientAlerts' => $merged,
+                'broadcasts' => [],
+            ],
+            'meta' => [
+                'pendingQuotations' => $merged->where('kind', 'web_design_quotation')->count(),
+                'inboxCount' => $inboxAlerts->count(),
+                'broadcasts' => [
+                    'current_page' => 1,
+                    'last_page' => 1,
+                    'total' => 0,
+                ],
+            ],
+        ]);
+    }
+
+    public function broadcastNotification(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $validated = $request->validate([
+            'title' => ['required', 'string', 'max:255'],
+            'body' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $customerIds = User::role('customer')
+            ->where('is_active', true)
+            ->pluck('id');
+
+        if ($customerIds->isEmpty()) {
+            return response()->json([
+                'message' => 'No active client accounts found to receive this broadcast.',
+            ], 422);
+        }
+
+        $referenceKey = 'broadcast:' . now()->format('YmdHis') . ':' . substr(md5($validated['title'] . $validated['body']), 0, 8);
+        $now = now();
+        $payload = $customerIds->map(fn ($customerId) => [
+            'customer_id' => $customerId,
+            'reference_key' => $referenceKey,
+            'title' => $validated['title'],
+            'body' => $validated['body'],
+            'type' => 'general',
+            'action_url' => '/public/dashboard?tab=notification',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->all();
+
+        CustomerNotification::query()->insert($payload);
+
+        return response()->json([
+            'message' => 'Broadcast notice successfully sent to all client portals.',
+            'data' => [
+                'recipients' => count($payload),
+                'referenceKey' => $referenceKey,
+            ],
+        ], 201);
+    }
+
+    private function mapAdminProfileChangeRequest(CustomerProfileChangeRequest $request): array
+    {
+        $customer = $request->customer;
+        $client = trim(($customer?->mname ?: '') !== ''
+            ? $customer->mname
+            : ($customer?->full_name ?? 'Customer'));
+        $payload = $request->requested_payload ?? [];
+        $changes = $this->profileChangeFields($request);
+        $avatarPath = $payload['avatar_path'] ?? null;
+
+        return [
+            'id' => $request->id,
+            'kind' => 'profile_change',
+            'proofNo' => $request->request_no,
+            'invoiceId' => $request->request_no,
+            'client' => $client,
+            'email' => $customer?->email,
+            'fileName' => $avatarPath ? basename($avatarPath) : '',
+            'fileUrl' => StorageUrl::publicAsset($avatarPath),
+            'status' => $request->status,
+            'notes' => $request->notes,
+            'summary' => $request->summary,
+            'changes' => $changes,
+            'currentAvatarUrl' => StorageUrl::publicAsset($customer?->avatar),
+            'submittedAt' => optional($request->created_at)->format('Y-m-d H:i'),
+            'issuedDate' => optional($request->created_at)->format('M j, Y'),
+            'expiredDate' => optional($request->created_at)?->copy()->addDays(7)->format('M j, Y'),
+            'amount' => 0,
+            'serviceName' => 'Profile Change',
+            'plan' => $this->profileChangePlanLabel($payload),
+        ];
+    }
+
+    private function profileChangeFields(CustomerProfileChangeRequest $request): array
+    {
+        $current = $request->current_snapshot ?? [];
+        $requested = $request->requested_payload ?? [];
+        $labels = [
+            'fname' => 'First Name',
+            'lname' => 'Last Name',
+            'mobile' => 'Mobile Phone',
+            'mname' => 'Company Legal Name',
+            'address_country' => 'Billing Country',
+            'address_region' => 'Billing Region',
+            'address_province' => 'Billing Province',
+            'address_city' => 'Billing City',
+            'address_street' => 'Billing Street',
+            'address_zip' => 'Billing Code',
+        ];
+        $changes = [];
+
+        foreach ($labels as $key => $label) {
+            $from = trim((string) ($current[$key] ?? ''));
+            $to = trim((string) ($requested[$key] ?? ''));
+            if ($from !== $to) {
+                $changes[] = [
+                    'field' => $key,
+                    'label' => $label,
+                    'from' => $from ?: '—',
+                    'to' => $to ?: '—',
+                ];
+            }
+        }
+
+        $currentAvatar = $current['avatar'] ?? null;
+        $requestedAvatar = $requested['avatar_path'] ?? null;
+        if ($requestedAvatar) {
+            $changes[] = [
+                'field' => 'avatar',
+                'label' => 'Profile Photo',
+                'from' => StorageUrl::publicAsset($currentAvatar) ?? '—',
+                'to' => StorageUrl::publicAsset($requestedAvatar) ?? '—',
+            ];
+        }
+
+        return $changes;
+    }
+
+    private function resolveApprovedProfileAvatarPath(User $customer, string $pendingPath): string
+    {
+        if (!Storage::disk('public')->exists($pendingPath)) {
+            abort(422, 'The requested profile photo file could not be found. Ask the customer to submit again.');
+        }
+
+        $extension = pathinfo($pendingPath, PATHINFO_EXTENSION) ?: 'jpg';
+        $newPath = 'avatars/' . $customer->id . '-' . now()->format('YmdHis') . '.' . $extension;
+        Storage::disk('public')->move($pendingPath, $newPath);
+
+        if ($customer->avatar && Storage::disk('public')->exists($customer->avatar)) {
+            Storage::disk('public')->delete($customer->avatar);
+        }
+
+        return $newPath;
+    }
+
+    private function cleanupPendingProfileAvatar(array $payload): void
+    {
+        $path = $payload['avatar_path'] ?? null;
+        if ($path && Storage::disk('public')->exists($path)) {
+            Storage::disk('public')->delete($path);
+        }
+    }
+
+    private function profileChangePlanLabel(array $payload): string
+    {
+        if (!empty($payload['avatar_path'])) {
+            $parts = array_filter([
+                'Profile photo update',
+                trim(($payload['fname'] ?? '') . ' ' . ($payload['lname'] ?? '')),
+                $payload['mname'] ?? null,
+            ]);
+            return implode(' · ', $parts);
+        }
+
+        $parts = array_filter([
+            trim(($payload['fname'] ?? '') . ' ' . ($payload['lname'] ?? '')),
+            $payload['mname'] ?? null,
+            $payload['mobile'] ?? null,
+        ]);
+
+        return $parts ? implode(' · ', $parts) : 'Profile update request';
+    }
+
     private function mapAdminPaymentProof(CustomerPaymentProof $proof): array
     {
         $customer = $proof->customer;
         $company = $customer?->full_name ?? 'Customer';
+        $transaction = $proof->salesTransaction;
+        $items = $transaction?->items;
+        $firstItem = $items?->first();
+        $transactedAt = $transaction?->transacted_at;
 
         return [
             'id' => $proof->id,
@@ -248,12 +895,15 @@ class CommerceAdminController extends Controller
             'client' => $company,
             'email' => $customer?->email,
             'fileName' => $proof->file_name,
-            'fileUrl' => $proof->file_path ? url(Storage::disk('public')->url($proof->file_path)) : null,
+            'fileUrl' => StorageUrl::publicAsset($proof->file_path),
             'status' => $proof->status,
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
-            'amount' => (float) ($proof->salesTransaction?->grand_total ?? 0),
-            'serviceName' => $proof->salesTransaction?->items?->first()?->name,
+            'issuedDate' => TransactionLabelResolver::issuedDateFrom($transactedAt),
+            'expiredDate' => TransactionLabelResolver::dueDateFrom($transactedAt),
+            'amount' => $transaction ? WebDesignQuotation::displayAmount($transaction) : 0.0,
+            'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($items),
+            'plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
         ];
     }
 
@@ -276,14 +926,31 @@ class CommerceAdminController extends Controller
     private function mapAdminService(CustomerService $service): array
     {
         $customer = $service->customer;
+        $labels = ServiceCatalogLabelResolver::describe(
+            $service->title,
+            $service->category,
+            $service->plan,
+            $customer?->website,
+        );
+        $subjectDomain = collect([$labels['subject'], $labels['domain']])
+            ->filter()
+            ->implode(' ');
 
         return [
             'id' => $service->id,
+            'customerId' => $customer?->id,
             'title' => $service->title,
             'category' => $service->category,
             'plan' => $service->plan,
+            'serviceName' => $labels['service_name'] ?: ($service->category ?: $service->title),
+            'planName' => $labels['plan_name'] ?: $service->plan,
+            'subject' => $labels['subject'],
+            'productCategory' => $labels['product_category'],
+            'domain' => $labels['domain'],
+            'subjectDomain' => $subjectDomain !== '' ? $subjectDomain : null,
             'status' => $service->status,
             'client' => $customer?->full_name ?? 'Customer',
+            'company' => $customer?->mname,
             'email' => $customer?->email,
             'renewLabel' => $service->renew_label,
             'renewAt' => optional($service->renew_at)->format('Y-m-d'),
@@ -298,7 +965,7 @@ class CommerceAdminController extends Controller
             'orderId' => $row->transaction_no,
             'company' => $row->customer_name ?: ($row->customer?->full_name ?? 'Unknown'),
             'dateCreated' => optional($row->transacted_at)->format('Y-m-d'),
-            'amount' => (float) $row->grand_total,
+            'amount' => WebDesignQuotation::displayAmount($row),
             'status' => ucfirst($row->order_status ?: 'New'),
         ];
     }
@@ -309,6 +976,7 @@ class CommerceAdminController extends Controller
 
         return [
             'id' => (string) $row->id,
+            'customerId' => $row->customer_id,
             'service' => $row->title,
             'company' => $row->customer?->full_name ?? 'Customer',
             'expiryDate' => optional($row->renew_at)->format('Y-m-d'),
@@ -324,8 +992,125 @@ class CommerceAdminController extends Controller
             'reference' => $row->transaction_no,
             'company' => $row->customer_name ?: ($row->customer?->full_name ?? 'Unknown'),
             'dueDate' => optional($row->transacted_at)->format('Y-m-d'),
-            'amount' => (float) $row->grand_total,
+            'amount' => WebDesignQuotation::displayAmount($row),
             'status' => 'Overdue',
         ];
+    }
+
+    private function pendingWebDesignQuotationsQuery()
+    {
+        return SalesTransaction::query()
+            ->where(function ($query) {
+                $query->where('notes', 'like', '%Pricing: Pending Quotation%')
+                    ->orWhere(function ($inner) {
+                        $inner->where(function ($notes) {
+                            $notes->whereNull('notes')
+                                ->orWhere('notes', 'not like', '%Pricing: Set by Sales%');
+                        })
+                            ->where('grand_total', '<=', 0)
+                            ->whereHas('items', function ($items) {
+                                $items->where(function ($item) {
+                                    $item->where('item_type', 'like', '%web_design%')
+                                        ->orWhere('item_type', 'like', '%webdesign%')
+                                        ->orWhere('name', 'like', '%web design%')
+                                        ->orWhere('name', 'like', '%Starter Launch%')
+                                        ->orWhere('name', 'like', '%Professional Corporate%')
+                                        ->orWhere('name', 'like', '%E-Commerce%');
+                                });
+                            });
+                    });
+            })
+            ->where(function ($query) {
+                $query->whereNull('notes')
+                    ->orWhere('notes', 'not like', '%Payment: Requested%');
+            });
+    }
+
+    private function formatAppDateTime(mixed $value, string $format = 'Y-m-d H:i'): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $carbon = $value instanceof CarbonInterface
+            ? $value->copy()
+            : Carbon::parse($value);
+
+        return $carbon
+            ->timezone(config('app.timezone', 'Asia/Manila'))
+            ->format($format);
+    }
+
+    private function mapWebDesignQuotationAlert(SalesTransaction $row): array
+    {
+        $customer = $row->customer;
+        $client = $row->customer_name
+            ?: (trim(($customer?->mname ?: '') !== ''
+                ? (string) $customer->mname
+                : ($customer?->full_name ?? 'Client')));
+        $itemNames = $row->items
+            ? $row->items->pluck('name')->filter()->take(3)->implode(', ')
+            : '';
+
+        $needsProposal = ! WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SUBMITTED);
+        $needsProceed = WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SIGNED);
+        $title = $needsProceed
+            ? 'Proceed Payment — signed proposal received'
+            : ($needsProposal ? 'Upload Proposal Quotation' : 'Waiting for client to sign proposal');
+        $status = $needsProceed ? 'Proceed Payment' : ($needsProposal ? 'Upload Proposal' : 'Awaiting Signature');
+
+        return [
+            'id' => (int) $row->id,
+            'kind' => 'web_design_quotation',
+            'title' => $title,
+            'desc' => trim(
+                "{$client} has a web design order"
+                . ($itemNames ? " ({$itemNames})" : '')
+                . ". Transaction {$row->transaction_no}."
+            ),
+            'date' => $this->formatAppDateTime(
+                $row->created_at ?? $row->transacted_at
+            ),
+            'audience' => $client,
+            'email' => $row->customer_email ?: ($customer?->email),
+            'transactionNo' => $row->transaction_no,
+            'status' => $status,
+            'actionUrl' => '/public/commerce-admin?tab=orders',
+        ];
+    }
+
+    private function pendingPaymentProofCount(): int
+    {
+        return (int) CustomerPaymentProof::query()
+            ->where('status', 'Pending Review')
+            ->selectRaw('COUNT(DISTINCT COALESCE(sales_transaction_id, invoice_id)) as aggregate')
+            ->value('aggregate');
+    }
+
+    /** Keep only the newest pending proof per invoice and remove older duplicates. */
+    private function collapseDuplicatePendingPaymentProofs(): void
+    {
+        $pending = CustomerPaymentProof::query()
+            ->where('status', 'Pending Review')
+            ->orderByDesc('id')
+            ->get(['id', 'invoice_id', 'sales_transaction_id', 'file_path']);
+
+        $seen = [];
+        foreach ($pending as $proof) {
+            $key = (string) ($proof->sales_transaction_id ?: $proof->invoice_id);
+            if ($key === '') {
+                $key = 'id:' . $proof->id;
+            }
+
+            if (isset($seen[$key])) {
+                if ($proof->file_path && Storage::disk('public')->exists($proof->file_path)) {
+                    Storage::disk('public')->delete($proof->file_path);
+                }
+                $proof->delete();
+                continue;
+            }
+
+            $seen[$key] = true;
+        }
     }
 }

@@ -49,8 +49,6 @@ class RoleSeeder extends Seeder
             'commerce_managed.manage',
             'commerce_contracts.view',
             'commerce_contracts.manage',
-            'commerce_catalog.view',
-            'commerce_catalog.manage',
             'products.manage',
             'inventory.view',
             'inventory.manage',
@@ -78,6 +76,41 @@ class RoleSeeder extends Seeder
             'commerce_dashboard.view',
             'sales_transactions.view',
             'sales_transactions.manage',
+            'commerce_notifications.view',
+            'commerce_notifications.manage',
+            'commerce_helpdesk.view',
+            'commerce_helpdesk.create',
+            'commerce_helpdesk.update',
+        ];
+
+        $commerceBillingInCharge = [
+            'dashboard.view',
+            'commerce_dashboard.view',
+            'customers.manage',
+            'sales_transactions.view',
+            'sales_transactions.manage',
+            'commerce_approvals.view',
+            'commerce_approvals.manage',
+            'commerce_managed.view',
+            'commerce_managed.manage',
+            'coupons.manage',
+            'commerce_notifications.view',
+            'commerce_notifications.manage',
+            'commerce_helpdesk.view',
+            'commerce_helpdesk.create',
+            'commerce_helpdesk.update',
+        ];
+
+        $commerceSalesStaff = [
+            'dashboard.view',
+            'commerce_dashboard.view',
+            'customers.manage',
+            'sales_transactions.view',
+            'sales_transactions.manage',
+            'commerce_approvals.view',
+            'commerce_approvals.manage',
+            'commerce_managed.view',
+            'commerce_managed.manage',
             'commerce_notifications.view',
             'commerce_notifications.manage',
             'commerce_helpdesk.view',
@@ -125,6 +158,22 @@ class RoleSeeder extends Seeder
         $technicalSupport->save();
         $technicalSupport->syncPermissions($commerceTechnicalSupport);
 
+        $billingInCharge = Role::firstOrCreate(
+            ['name' => 'billing_in_charge', 'guard_name' => 'sanctum'],
+            ['description' => 'Billing-in-Charge']
+        );
+        $billingInCharge->description = 'Billing-in-Charge';
+        $billingInCharge->save();
+        $billingInCharge->syncPermissions($commerceBillingInCharge);
+
+        $salesStaff = Role::firstOrCreate(
+            ['name' => 'sales_staff', 'guard_name' => 'sanctum'],
+            ['description' => 'Sales Staff']
+        );
+        $salesStaff->description = 'Sales Staff';
+        $salesStaff->save();
+        $salesStaff->syncPermissions($commerceSalesStaff);
+
         $editor = Role::firstOrCreate(
             ['name' => 'editor', 'guard_name' => 'sanctum'],
             ['description' => 'Editor']
@@ -145,6 +194,37 @@ class RoleSeeder extends Seeder
             'albums.edit',
             'menus.view',
         ]);
+
+        $marketingPermissions = [
+            'dashboard.view',
+            'pages.view',
+            'pages.create',
+            'pages.edit',
+            'albums.view',
+            'albums.create',
+            'albums.edit',
+            'file_manager.manage',
+            'menus.view',
+            'menus.create',
+            'menus.edit',
+            'commerce_dashboard.view',
+            'customers.manage',
+            'commerce_managed.view',
+            'commerce_managed.manage',
+            'commerce_notifications.view',
+            'commerce_notifications.manage',
+            'commerce_helpdesk.view',
+            'commerce_helpdesk.create',
+            'commerce_helpdesk.update',
+        ];
+
+        $marketing = Role::firstOrCreate(
+            ['name' => 'marketing', 'guard_name' => 'sanctum'],
+            ['description' => 'Marketing']
+        );
+        $marketing->description = 'Marketing';
+        $marketing->save();
+        $marketing->syncPermissions($marketingPermissions);
 
         $customer = Role::firstOrCreate(
             ['name' => 'customer', 'guard_name' => 'sanctum'],

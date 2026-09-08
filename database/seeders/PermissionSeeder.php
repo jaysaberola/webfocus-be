@@ -73,7 +73,7 @@ class PermissionSeeder extends Seeder
             // Commerce — Clients
             'customers.manage',
 
-            // Commerce — Transactions
+            // Commerce — Orders
             'sales_transactions.view',
             'sales_transactions.manage',
 
@@ -81,7 +81,7 @@ class PermissionSeeder extends Seeder
             'commerce_approvals.view',
             'commerce_approvals.manage',
 
-            // Commerce — Managed Services
+            // CMS — Managed Services (catalog / discounts)
             'commerce_managed.view',
             'commerce_managed.manage',
 
@@ -89,9 +89,7 @@ class PermissionSeeder extends Seeder
             'commerce_contracts.view',
             'commerce_contracts.manage',
 
-            // Commerce — Catalog
-            'commerce_catalog.view',
-            'commerce_catalog.manage',
+            // Commerce — Products & billing tools
             'products.manage',
             'inventory.view',
             'inventory.manage',

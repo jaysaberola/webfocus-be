@@ -36,9 +36,6 @@ use App\Http\Controllers\Api\CommerceAdminController;
 use App\Http\Controllers\Api\DomainLookupController;
 use App\Http\Controllers\Api\PaynamicsPaymentController;
 use App\Http\Controllers\Api\AccountController;
-use App\Http\Controllers\Api\AccountController;
-
-
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/customer-login', [AuthController::class, 'customerLogin']);
@@ -53,11 +50,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/overview', [CustomerPortalController::class, 'overview']);
         Route::get('/services', [CustomerPortalController::class, 'services']);
         Route::get('/orders', [CustomerPortalController::class, 'orders']);
+        Route::post('/orders/{salesTransaction}/cancel', [CustomerPortalController::class, 'cancelOrder']);
         Route::get('/billing', [CustomerPortalController::class, 'billing']);
         Route::post('/billing/pay', [CustomerPortalController::class, 'payInvoice']);
         Route::post('/billing/add-funds', [CustomerPortalController::class, 'addFunds']);
         Route::post('/billing/payment-proofs', [CustomerPortalController::class, 'uploadPaymentProof']);
         Route::delete('/billing/payment-proofs/{paymentProof}', [CustomerPortalController::class, 'deletePaymentProof']);
+        Route::get('/billing/proposals/{salesTransaction}', [CustomerPortalController::class, 'listProposals']);
+        Route::post('/billing/proposals', [CustomerPortalController::class, 'uploadSignedProposal']);
         Route::get('/notifications', [CustomerPortalController::class, 'notifications']);
         Route::get('/notifications/unread-count', [CustomerPortalController::class, 'unreadNotificationCount']);
         Route::patch('/notifications/read-all', [CustomerPortalController::class, 'markAllNotificationsRead']);
@@ -65,30 +65,47 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/notifications/{notification}', [CustomerPortalController::class, 'deleteNotification']);
         Route::get('/tickets', [CustomerPortalController::class, 'tickets']);
         Route::post('/tickets', [CustomerPortalController::class, 'storeTicket']);
+        Route::get('/profile-change-requests/pending', [CustomerPortalController::class, 'pendingProfileChange']);
+        Route::post('/profile-change-requests', [CustomerPortalController::class, 'submitProfileChange']);
     });
 
     Route::prefix('commerce-admin')->group(function () {
         Route::get('/dashboard', [CommerceAdminController::class, 'dashboard']);
+        Route::get('/approvals', [CommerceAdminController::class, 'approvals']);
         Route::get('/payment-proofs', [CommerceAdminController::class, 'paymentProofs']);
         Route::patch('/payment-proofs/{paymentProof}/verify', [CommerceAdminController::class, 'verifyPaymentProof']);
         Route::patch('/payment-proofs/{paymentProof}/reject', [CommerceAdminController::class, 'rejectPaymentProof']);
+        Route::patch('/profile-change-requests/{profileChangeRequest}/approve', [CommerceAdminController::class, 'approveProfileChange']);
+        Route::patch('/profile-change-requests/{profileChangeRequest}/reject', [CommerceAdminController::class, 'rejectProfileChange']);
         Route::get('/tickets', [CommerceAdminController::class, 'tickets']);
         Route::patch('/tickets/{ticket}', [CommerceAdminController::class, 'updateTicket']);
         Route::get('/services', [CommerceAdminController::class, 'services']);
+        Route::get('/notifications', [CommerceAdminController::class, 'notifications']);
+        Route::post('/notifications/broadcast', [CommerceAdminController::class, 'broadcastNotification']);
+        Route::get('/assignable-users', [CommerceAdminController::class, 'assignableUsers']);
+        Route::patch('/sales-transactions/{salesTransaction}/assign', [CommerceAdminController::class, 'assignSalesTransaction']);
+        Route::patch('/customers/{customer}/assign-owner', [CommerceAdminController::class, 'assignCustomerOwner']);
+        Route::get('/customers/{customer}/next-rotating-owner', [CommerceAdminController::class, 'nextRotatingClientOwner']);
     });
 
     // Commerce data shared by CMS modules and Commerce Control Center
     Route::apiResource('sales-transactions', SalesTransactionController::class)
         ->parameters(['sales-transactions' => 'salesTransaction']);
+    Route::get('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'proposals']);
+    Route::post('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'uploadProposal']);
+    Route::post('/sales-transactions/{salesTransaction}/proceed-payment', [SalesTransactionController::class, 'proceedPayment']);
     Route::get('/customers', [CustomerController::class, 'index']);
+    Route::post('/customers', [CustomerController::class, 'store']);
+    Route::post('/customers/bulk-delete', [CustomerController::class, 'bulkDestroy']);
     Route::get('/customers/{customer}', [CustomerController::class, 'show']);
     Route::put('/customers/{customer}', [CustomerController::class, 'update']);
     Route::patch('/customers/{customer}', [CustomerController::class, 'update']);
-    Route::post('/customers', [CustomerController::class, 'store']);
+    Route::post('/customers/{customer}', [CustomerController::class, 'update']);
+    Route::delete('/customers/{customer}', [CustomerController::class, 'destroy']);
 
     Route::middleware('cms.portal')->group(function () {
-    // dashboard
-    Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
+        // dashboard
+        Route::get('/dashboard/stats', [DashboardController::class, 'stats']);
 
     // pages
     Route::get('/pages-switcher', [PageController::class, 'switcherList']);
@@ -265,10 +282,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('zip',               [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'zip']);
         Route::post('unzip',             [\Alexusmai\LaravelFileManager\Controllers\FileManagerController::class, 'unzip']);
     });
-
-    });
-
-});
+    }); // cms.portal
+}); // auth:sanctum
 
 //public
 Route::get('/public-products', [ProductController::class, 'index']);

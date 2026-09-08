@@ -35,7 +35,9 @@ class AccountController extends Controller
                 'address_city',
                 'address_municipality',
                 'address_province',
+                'address_region',
                 'address_zip',
+                'address_country',
             ]),
             [
                 'role' => $user->getRoleNames()->first(),
@@ -60,7 +62,9 @@ class AccountController extends Controller
             'address_city' => 'nullable|string|max:120',
             'address_municipality' => 'nullable|string|max:120',
             'address_province' => 'nullable|string|max:120',
+            'address_region' => 'nullable|string|max:120',
             'address_zip' => 'nullable|string|max:30',
+            'address_country' => 'nullable|string|max:120',
             'avatar' => 'nullable|image|mimes:jpeg,png,jpg|max:1024',
         ]);
 
@@ -80,18 +84,61 @@ class AccountController extends Controller
 
         $user->fname = $request->fname;
         $user->lname = $request->lname;
-        $user->mobile = $request->mobile;
-        $user->birth_date = $request->birth_date;
-        $user->address_street = $request->address_street;
-        $user->address_city = $request->address_city;
-        $user->address_municipality = $request->address_municipality;
-        $user->address_province = $request->address_province;
-        $user->address_zip = $request->address_zip;
+        if ($request->exists('mobile')) {
+            $user->mobile = $request->mobile;
+        }
+        if ($request->exists('birth_date')) {
+            $user->birth_date = $request->birth_date;
+        }
+        if ($request->exists('address_street')) {
+            $user->address_street = $request->address_street;
+        }
+        if ($request->exists('address_city')) {
+            $user->address_city = $request->address_city;
+        }
+        if ($request->exists('address_municipality')) {
+            $user->address_municipality = $request->address_municipality;
+        }
+        if ($request->exists('address_province')) {
+            $user->address_province = $request->address_province;
+        }
+        if ($request->exists('address_region')) {
+            $user->address_region = $request->address_region;
+        }
+        if ($request->exists('address_zip')) {
+            $user->address_zip = $request->address_zip;
+        }
+        if ($request->exists('address_country')) {
+            $user->address_country = $request->address_country;
+        }
         $user->save();
+        $user->refresh();
 
         return response()->json([
             'message' => 'Profile updated successfully',
-            'user' => $user,
+            'user' => array_merge(
+                $user->only([
+                    'id',
+                    'fname',
+                    'mname',
+                    'lname',
+                    'email',
+                    'mobile',
+                    'avatar',
+                    'birth_date',
+                    'address_street',
+                    'address_city',
+                    'address_municipality',
+                    'address_province',
+                    'address_region',
+                    'address_zip',
+                    'address_country',
+                ]),
+                [
+                    'role' => $user->getRoleNames()->first(),
+                    'roles' => $user->getRoleNames()->values()->all(),
+                ]
+            ),
         ]);
     }
 

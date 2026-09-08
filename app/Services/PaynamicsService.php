@@ -140,7 +140,7 @@ class PaynamicsService
 
         foreach ($required as $field => $value) {
             if (trim((string) $value) === '') {
-                $errors[$field][] = 'This profile field is required for Paynamics checkout.';
+                $errors[$field][] = 'Complete your billing address to continue Paynamics checkout.';
             }
         }
 

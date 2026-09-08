@@ -30,6 +30,12 @@ class Article extends Model implements AuditableContract
         'user_id',
     ];
 
+    protected $auditExclude = [
+        'contents',
+        'json',
+        'styles',
+    ];
+
     protected $casts = [
         'date' => 'date:Y-m-d',
         'is_featured' => 'boolean',

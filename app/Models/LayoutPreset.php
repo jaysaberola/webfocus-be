@@ -19,4 +19,8 @@ class LayoutPreset extends Model implements AuditableContract
         'content',
         'is_active',
     ];
+
+    protected $auditExclude = [
+        'content',
+    ];
 }

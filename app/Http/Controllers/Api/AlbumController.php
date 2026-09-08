@@ -95,6 +95,7 @@ class AlbumController extends Controller
     public function store(Request $request)
     {
         return DB::transaction(function () use ($request) {
+            $this->validateBannerUploads($request);
 
             $album = Album::create([
                 'name' => $request->name,
@@ -115,6 +116,7 @@ class AlbumController extends Controller
     public function update(Request $request, Album $album)
     {
         return DB::transaction(function () use ($request, $album) {
+            $this->validateBannerUploads($request);
 
             $album->update($request->all());
 
@@ -122,6 +124,23 @@ class AlbumController extends Controller
 
             return response()->json($album->load('banners'));
         });
+    }
+
+    private function validateBannerUploads(Request $request): void
+    {
+        $banners = $request->input('banners', []);
+        if (! is_array($banners)) {
+            return;
+        }
+
+        $rules = [];
+        foreach (array_keys($banners) as $index) {
+            $rules["banners.$index.image"] = ['nullable', 'file', 'max:10240'];
+        }
+
+        if ($rules !== []) {
+            $request->validate($rules);
+        }
     }
 
     private function syncBanners(Album $album, array $banners)

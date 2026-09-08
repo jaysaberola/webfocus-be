@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\TransactionLabelResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use OwenIt\Auditing\Auditable;
@@ -26,6 +27,7 @@ class SalesTransaction extends Model implements AuditableContract
         'notes',
         'transacted_at',
         'user_id',
+        'client_owner_id',
     ];
 
     protected $casts = [
@@ -37,6 +39,21 @@ class SalesTransaction extends Model implements AuditableContract
         'transacted_at' => 'datetime',
     ];
 
+    protected $appends = [
+        'issued_date',
+        'due_date',
+    ];
+
+    public function getIssuedDateAttribute(): ?string
+    {
+        return TransactionLabelResolver::issuedDateFrom($this->transacted_at);
+    }
+
+    public function getDueDateAttribute(): ?string
+    {
+        return TransactionLabelResolver::dueDateFrom($this->transacted_at);
+    }
+
     public function customer()
     {
         return $this->belongsTo(User::class, 'customer_id');
@@ -47,9 +64,19 @@ class SalesTransaction extends Model implements AuditableContract
         return $this->belongsTo(User::class);
     }
 
+    public function clientOwner()
+    {
+        return $this->belongsTo(User::class, 'client_owner_id');
+    }
+
     public function items()
     {
         return $this->hasMany(SalesTransactionItem::class);
+    }
+
+    public function proposals()
+    {
+        return $this->hasMany(SalesTransactionProposal::class);
     }
 
     public function paynamicsPaymentReferences()
