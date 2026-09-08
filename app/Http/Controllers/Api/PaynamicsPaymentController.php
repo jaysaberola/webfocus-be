@@ -22,16 +22,16 @@ class PaynamicsPaymentController extends Controller
         Request $request,
         PaynamicsService $paynamics
     ): JsonResponse {
+        $payload = $this->paynamicsPayload($request);
+
         Log::info('PAYNAMICS NOTIFICATION RECEIVED', [
-            'request_id' => $request->input('request_id'),
-            'response_code' => $request->input('response_code'),
-            'has_signature' => $request->filled('signature'),
+            'request_id' => $payload['request_id'] ?? $request->input('request_id'),
+            'response_code' => $payload['response_code'] ?? $request->input('response_code'),
+            'has_signature' => !empty($payload['signature']),
         ]);
 
         try {
-            $reference = $paynamics->processNotification(
-                $request->all()
-            );
+            $reference = $paynamics->processNotification($payload);
 
             return response()->json([
                 'message' => 'Notification accepted.',
@@ -67,15 +67,26 @@ class PaynamicsPaymentController extends Controller
         Request $request,
         PaynamicsService $paynamics
     ): RedirectResponse {
+        $payload = $this->paynamicsPayload($request);
+        $requestId = trim((string) (
+            $payload['request_id'] ??
+            $request->input('request_id') ??
+            ''
+        ));
         $status = 'pending';
 
-        if ($request->filled('signature')) {
+        Log::info('PAYNAMICS BROWSER RETURN RECEIVED', [
+            'request_id' => $requestId,
+            'response_code' => $payload['response_code'] ?? $request->input('response_code'),
+            'has_signature' => !empty($payload['signature']),
+        ]);
+
+        if (!empty($payload['signature'])) {
             try {
-                $reference = $paynamics->processNotification(
-                    $request->all()
-                );
+                $reference = $paynamics->processNotification($payload);
 
                 $status = $reference->status;
+                $requestId = $reference->request_id;
             } catch (Throwable $exception) {
                 Log::warning('Invalid Paynamics browser return.', [
                     'request_id' => $request->input('request_id'),
@@ -84,66 +95,78 @@ class PaynamicsPaymentController extends Controller
 
                 $status = 'verification_failed';
             }
-        } elseif ($request->filled('request_id')) {
+        } elseif ($requestId !== '') {
             /*
              * An unsigned browser response is never used to update payment
              * status. We only display the status already stored by the signed
              * Paynamics notification.
              */
             $status = PaynamicsPaymentReference::query()
-                ->where(
-                    'request_id',
-                    (string) $request->input('request_id')
-                )
+                ->where('request_id', $requestId)
                 ->value('status') ?: 'pending';
         }
 
-        return $this->frontendRedirect($status);
+        return $this->frontendRedirect(
+            $this->frontendStatus($status),
+            $requestId
+        );
     }
 
     /**
      * Return the customer after cancelling the hosted checkout.
      */
     public function cancel(Request $request): RedirectResponse
-{
-    $requestId = trim((string) $request->input('request_id'));
+    {
+        $payload = $this->paynamicsPayload($request);
+        $requestId = trim((string) (
+            $payload['request_id'] ??
+            $request->input('request_id') ??
+            ''
+        ));
 
-    if ($requestId === '') {
-        Log::warning('PAYNAMICS CANCELLATION WITHOUT REQUEST ID');
+        if ($requestId === '') {
+            Log::warning('PAYNAMICS CANCELLATION WITHOUT REQUEST ID');
 
-        return $this->frontendRedirect('cancelled');
-    }
+            return $this->frontendRedirect('cancelled');
+        }
 
-    /*
-     * Update only a pending transaction. This atomic condition prevents
-     * a late browser cancellation from overwriting an already successful
-     * payment notification.
-     */
-    $updated = PaynamicsPaymentReference::query()
-        ->where('request_id', $requestId)
-        ->where('status', 'pending')
-        ->update([
-            'status' => 'cancelled',
+        /*
+         * Update only non-final transactions. A late browser cancellation must
+         * never overwrite an already successful signed payment notification.
+         */
+        $updated = PaynamicsPaymentReference::query()
+            ->where('request_id', $requestId)
+            ->whereIn('status', [
+                'initiating',
+                'redirect_ready',
+                'pending',
+            ])
+            ->update([
+                'status' => 'cancelled',
+                'failed_at' => now(),
+            ]);
+
+        $status = PaynamicsPaymentReference::query()
+            ->where('request_id', $requestId)
+            ->value('status');
+
+        Log::info('PAYNAMICS CHECKOUT CANCELLED', [
+            'request_id' => $requestId,
+            'updated' => $updated === 1,
+            'status' => $status,
         ]);
 
-    $status = PaynamicsPaymentReference::query()
-        ->where('request_id', $requestId)
-        ->value('status');
-
-    Log::info('PAYNAMICS CHECKOUT CANCELLED', [
-        'request_id' => $requestId,
-        'updated' => $updated === 1,
-        'status' => $status,
-    ]);
-
-    return $this->frontendRedirect($status ?: 'cancelled');
-}
-
-    private function frontendRedirect(string $status): RedirectResponse
-    {
-        $url = trim(
-            (string) config('paynamics.frontend_return_url')
+        return $this->frontendRedirect(
+            $this->frontendStatus($status ?: 'cancelled'),
+            $requestId
         );
+    }
+
+    private function frontendRedirect(
+        string $status,
+        ?string $requestId = null
+    ): RedirectResponse {
+        $url = trim((string) config('paynamics.frontend_return_url'));
 
         if ($url === '') {
             throw new RuntimeException(
@@ -151,14 +174,39 @@ class PaynamicsPaymentController extends Controller
             );
         }
 
+        $query = [
+            'paynamics' => $status,
+        ];
+
+        if ($requestId !== null && trim($requestId) !== '') {
+            $query['request_id'] = trim($requestId);
+        }
+
         $separator = str_contains($url, '?') ? '&' : '?';
 
         return redirect()->away(
-            $url .
-            $separator .
-            http_build_query([
-                'paynamics' => $status,
-            ])
+            $url . $separator . http_build_query($query)
         );
+    }
+
+    private function frontendStatus(string $status): string
+    {
+        return match ($status) {
+            'initiating', 'redirect_ready' => 'pending',
+            default => $status,
+        };
+    }
+
+    private function paynamicsPayload(Request $request): array
+    {
+        $payload = $request->all();
+
+        foreach (['response', 'transaction', 'data'] as $key) {
+            if (isset($payload[$key]) && is_array($payload[$key])) {
+                return $payload[$key];
+            }
+        }
+
+        return $payload;
     }
 }
