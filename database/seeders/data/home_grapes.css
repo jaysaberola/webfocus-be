@@ -277,23 +277,25 @@
 }
 
 .wsi-portfolio-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 30px 2%;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+  justify-content: stretch;
   padding: 20px 0;
   max-width: 80rem;
   margin: 0 auto;
+  width: 100%;
 }
 
 .wsi-portfolio-card {
-  flex: 0 0 32%;
-  max-width: 32%;
+  min-width: 0;
   background: #ffffff;
   border: 1px solid #e8edf3;
   border-radius: 14px;
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   height: 100%;
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
@@ -479,9 +481,7 @@
   flex: 1 1 auto;
   overflow: auto;
   background: #0f172a;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
+  display: block;
   min-height: 280px;
 }
 
@@ -529,34 +529,49 @@
   background: #ffffff;
 }
 
-.wsi-portfolio-modal-nav {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
+.wsi-portfolio-modal-panel {
+  position: relative;
 }
 
-.wsi-portfolio-modal-nav button {
-  width: 2.35rem;
-  height: 2.35rem;
-  border: 1px solid #dbeafe;
+.wsi-portfolio-modal-prev,
+.wsi-portfolio-modal-next {
+  position: absolute;
+  top: 50%;
+  z-index: 8;
+  width: 2.85rem;
+  height: 2.85rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
   border-radius: 9999px;
-  background: #eff6ff;
-  color: #2563eb;
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.28);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  transform: translateY(-50%);
 }
 
-.wsi-portfolio-modal-nav button:hover {
-  background: #dbeafe;
-  border-color: #93c5fd;
+.wsi-portfolio-modal-prev {
+  left: 14px;
 }
 
-.wsi-portfolio-modal-nav button svg {
-  width: 1rem;
-  height: 1rem;
+.wsi-portfolio-modal-next {
+  right: 14px;
+}
+
+.wsi-portfolio-modal-prev:hover,
+.wsi-portfolio-modal-next:hover {
+  background: #ffffff;
+  color: #1d4ed8;
+}
+
+.wsi-portfolio-modal-prev svg,
+.wsi-portfolio-modal-next svg {
+  width: 1.15rem;
+  height: 1.15rem;
 }
 
 .wsi-portfolio-modal-counter {
@@ -570,16 +585,14 @@ body.wsi-portfolio-modal-open {
 }
 
 @media (max-width: 991px) {
-  .wsi-portfolio-card {
-    flex: 0 0 48%;
-    max-width: 48%;
+  .wsi-portfolio-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 639px) {
-  .wsi-portfolio-card {
-    flex: 0 0 100%;
-    max-width: 100%;
+  .wsi-portfolio-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

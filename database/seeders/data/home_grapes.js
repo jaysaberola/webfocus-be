@@ -36,15 +36,13 @@
           '<div class="wsi-portfolio-modal-loader"><span></span></div>' +
           '<img alt="" />' +
         '</div>' +
+        '<button type="button" class="wsi-portfolio-modal-prev" aria-label="Previous project">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 19l-7-7 7-7"/></svg>' +
+        '</button>' +
+        '<button type="button" class="wsi-portfolio-modal-next" aria-label="Next project">' +
+          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>' +
+        '</button>' +
         '<div class="wsi-portfolio-modal-footer">' +
-          '<div class="wsi-portfolio-modal-nav">' +
-            '<button type="button" class="wsi-portfolio-modal-prev" aria-label="Previous project">' +
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 19l-7-7 7-7"/></svg>' +
-            '</button>' +
-            '<button type="button" class="wsi-portfolio-modal-next" aria-label="Next project">' +
-              '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>' +
-            '</button>' +
-          '</div>' +
           '<span class="wsi-portfolio-modal-counter"></span>' +
         '</div>' +
       '</div>';
