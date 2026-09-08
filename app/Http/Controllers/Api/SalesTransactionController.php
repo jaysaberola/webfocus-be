@@ -182,22 +182,46 @@ class SalesTransactionController extends Controller
         });
 
         try {
-            $gateway = $paynamics->initiate(
-                $transaction,
+            [$transaction, $gateway] = DB::transaction(function () use (
+                $validated,
+                $items,
+                $paynamics,
                 $customer,
-                $request->ip(),
-                $request->userAgent()
-            );
-        } catch (Throwable $exception) {
+                $request
+            ) {
+                $transaction = SalesTransaction::create($validated);
+                $this->syncItems($transaction, $items);
+                app(ClientOwnerRotator::class)->assign($transaction);
+
+                $transaction = $transaction->fresh(['items']);
+
+                $gateway = $paynamics->initiate(
+                    $transaction,
+                    $customer,
+                    $request->ip(),
+                    $request->userAgent()
+                );
+
+                return [$transaction, $gateway];
+            });
+        } catch (QueryException $exception) {
             report($exception);
 
             return response()->json([
-                'message' => $exception->getMessage(),
-                'data' => [
-                    'transaction_id' => $transaction->id,
-                    'transaction_no' => $transaction->transaction_no,
-                ],
-            ], 502);
+                'message' => 'Checkout failed because the transaction could not be saved. No transaction was created.',
+            ], 500);
+        } catch (Throwable $exception) {
+            report($exception);
+
+            $payload = [
+                'message' => 'Checkout could not be completed. No transaction was created.',
+            ];
+
+            if (config('app.debug')) {
+                $payload['error'] = $exception->getMessage();
+            }
+
+            return response()->json($payload, 502);
         }
 
         return response()->json([
