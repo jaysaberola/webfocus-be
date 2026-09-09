@@ -734,6 +734,99 @@ class CustomerPortalController extends Controller
         ], 201);
     }
 
+    public function deleteInvoices(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+        $validated = $request->validate([
+            'invoice_ids' => ['required', 'array', 'min:1', 'max:50'],
+            'invoice_ids.*' => ['required', 'string', 'max:120'],
+        ]);
+
+        $deleted = [];
+        $skipped = [];
+        $deletedNos = [];
+
+        DB::transaction(function () use ($customer, $validated, &$deleted, &$skipped, &$deletedNos) {
+            foreach ($validated['invoice_ids'] as $invoiceId) {
+                $transactionNo = str_starts_with($invoiceId, 'INV-')
+                    ? substr($invoiceId, 4)
+                    : $invoiceId;
+
+                $transaction = SalesTransaction::query()
+                    ->where('customer_id', $customer->id)
+                    ->where('transaction_no', $transactionNo)
+                    ->with('items')
+                    ->first();
+
+                if (!$transaction) {
+                    $skipped[] = [
+                        'invoiceId' => $invoiceId,
+                        'reason' => 'Invoice was not found.',
+                    ];
+                    continue;
+                }
+
+                $blockReason = $this->invoiceDeleteBlockReason($transaction);
+                if ($blockReason !== null) {
+                    $skipped[] = [
+                        'invoiceId' => $this->invoiceId($transaction),
+                        'reason' => $blockReason,
+                    ];
+                    continue;
+                }
+
+                CustomerService::query()
+                    ->where('sales_transaction_id', $transaction->id)
+                    ->delete();
+
+                $transaction->delete();
+                $deleted[] = $this->invoiceId($transaction);
+                $deletedNos[] = $transaction->transaction_no;
+            }
+        });
+
+        if ($deleted !== []) {
+            $count = count($deleted);
+            CustomerNotification::create([
+                'customer_id' => $customer->id,
+                'title' => $count === 1 ? 'Invoice Deleted' : 'Invoices Deleted',
+                'body' => $count === 1
+                    ? 'You deleted invoice ' . $deleted[0] . '.'
+                    : 'You deleted ' . $count . ' invoices.',
+                'type' => 'billing',
+                'action_url' => '/public/dashboard?tab=billing',
+            ]);
+
+            $clientLabel = trim(($customer->mname ?: '') !== ''
+                ? (string) $customer->mname
+                : trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''))) ?: ($customer->email ?? 'Client');
+
+            app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+                (int) $customer->id,
+                ['finance_admin', 'sales_admin', 'sales_staff', 'admin', 'customer_care'],
+                'admin:invoice-deleted:' . implode(',', $deletedNos),
+                $count === 1 ? 'Customer Deleted an Invoice' : 'Customer Deleted Invoices',
+                "{$clientLabel} deleted " . implode(', ', $deleted) . '.',
+                'billing',
+                '/public/commerce-admin?tab=invoices',
+            );
+
+            app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+        }
+
+        return response()->json([
+            'message' => $deleted === []
+                ? 'No invoices were deleted.'
+                : (count($deleted) === 1
+                    ? 'Invoice deleted.'
+                    : count($deleted) . ' invoices deleted.'),
+            'data' => [
+                'deleted' => $deleted,
+                'skipped' => $skipped,
+            ],
+        ], $deleted === [] ? 422 : 200);
+    }
+
     public function payInvoice(Request $request)
     {
         $customer = $this->resolveCustomer($request);
@@ -955,6 +1048,8 @@ class CustomerPortalController extends Controller
             'proposalFileName' => $proposal?->file_name,
             'proposalUrl' => StorageUrl::publicAsset($proposal?->file_path),
             'actionsDisabled' => $pendingQuotation && ! $proposalSubmitted,
+            'recordId' => $row->id,
+            'canDelete' => $this->invoiceDeleteBlockReason($row) === null,
         ];
     }
 
@@ -1106,6 +1201,27 @@ class CustomerPortalController extends Controller
         }
 
         return implode("\n", $lines);
+    }
+
+    private function invoiceDeleteBlockReason(SalesTransaction $transaction): ?string
+    {
+        if (in_array(strtolower((string) $transaction->payment_status), ['paid', 'completed', 'success'], true)) {
+            return 'Paid invoices cannot be deleted.';
+        }
+
+        $status = CustomerPortalProvisioner::resolveServiceStatus($transaction);
+        if (in_array($status, [
+            CustomerPortalProvisioner::STATUS_ACTIVE,
+            CustomerPortalProvisioner::STATUS_PROVISIONING,
+        ], true)) {
+            return 'Active or provisioning invoices cannot be deleted.';
+        }
+
+        if ($this->isPaymentSubmitted($transaction)) {
+            return 'Invoices awaiting payment approval cannot be deleted.';
+        }
+
+        return null;
     }
 
     private function resolveInvoiceTransaction(User $customer, string $invoiceId): SalesTransaction
