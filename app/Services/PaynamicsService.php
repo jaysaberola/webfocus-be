@@ -18,9 +18,11 @@ class PaynamicsService
 {
     private const SUCCESS_CODES = ['GR001', 'GR002'];
 
+    private const HOSTED_SUCCESS_CODES = ['GR001', 'GR002', 'GR033'];
+
     private const PENDING_CODES = [
-        'GR020',
         'GR033',
+        'GR020',
         'GR063',
         'GR119',
         'GR206',
@@ -76,11 +78,11 @@ class PaynamicsService
                 throw new RuntimeException('Paynamics returned a different merchant ID.');
             }
 
-            if ((string) ($body['request_id'] ?? '') !== $requestId) {
+            if ($this->requestId($body) !== $requestId) {
                 throw new RuntimeException('Paynamics returned a different request ID.');
             }
 
-            $responseCode = (string) ($body['response_code'] ?? '');
+            $responseCode = $this->responseCode($body);
             $redirectUrl = $this->redirectUrl($body);
 
             if (
@@ -169,31 +171,34 @@ class PaynamicsService
         }
     }
 
-    public function processNotification(array $payload): PaynamicsPaymentReference
-    {
+    public function processNotification(
+        array $payload,
+        bool $requireSignature = true,
+        bool $fromHostedReturn = false
+    ): PaynamicsPaymentReference {
         $payload = $this->unwrapPayload($payload);
         $this->assertConfigured();
 
-        $requestId = (string) ($payload['request_id'] ?? '');
+        $requestId = $this->requestId($payload);
         if ($requestId === '') {
             throw ValidationException::withMessages([
                 'request_id' => ['The Paynamics request ID is required.'],
             ]);
         }
 
-        if (!$this->hasValidResponseSignature($payload)) {
+        if ($requireSignature && !$this->hasValidResponseSignature($payload)) {
             throw ValidationException::withMessages([
                 'signature' => ['The Paynamics response signature is invalid.'],
             ]);
         }
 
-        if ($this->value($payload, 'merchant_id', 'merchantid') !== config('paynamics.merchant_id')) {
+        if ($requireSignature && $this->value($payload, 'merchant_id', 'merchantid') !== config('paynamics.merchant_id')) {
             throw ValidationException::withMessages([
                 'merchant_id' => ['The Paynamics merchant ID does not match.'],
             ]);
         }
 
-        $result = DB::transaction(function () use ($payload, $requestId) {
+        $result = DB::transaction(function () use ($payload, $requestId, $fromHostedReturn) {
             $reference = PaynamicsPaymentReference::query()
                 ->where('request_id', $requestId)
                 ->lockForUpdate()
@@ -204,8 +209,12 @@ class PaynamicsService
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $responseCode = (string) ($payload['response_code'] ?? '');
-            $nextStatus = $this->statusForResponseCode($responseCode);
+            $responseCode = $this->responseCode($payload);
+            if ($fromHostedReturn && $responseCode === '') {
+                $responseCode = 'GR033';
+            }
+
+            $nextStatus = $this->statusForResponseCode($responseCode, $fromHostedReturn);
 
             /*
              * A delayed or duplicate failure notification must never downgrade
@@ -262,6 +271,23 @@ class PaynamicsService
         return $result->fresh();
     }
 
+    public function settlePaidByRequestId(string $requestId, string $responseCode = 'GR033'): PaynamicsPaymentReference
+    {
+        return $this->processNotification(
+            [
+                'request_id' => $requestId,
+                'response_code' => $responseCode,
+            ],
+            false,
+            true
+        );
+    }
+
+    public function normalizeCallbackPayload(array $payload): array
+    {
+        return $this->unwrapPayload($payload);
+    }
+
     public function hasValidResponseSignature(array $payload): bool
     {
         $provided = strtolower(trim((string) ($payload['signature'] ?? '')));
@@ -271,16 +297,16 @@ class PaynamicsService
 
         $forSign =
             $this->value($payload, 'merchant_id', 'merchantid') .
-            (string) ($payload['request_id'] ?? '') .
-            (string) ($payload['response_id'] ?? '') .
-            (string) ($payload['gateway_id'] ?? '') .
-            (string) ($payload['response_code'] ?? '') .
-            (string) ($payload['response_message'] ?? '') .
-            (string) ($payload['response_advise'] ?? '') .
-            (string) ($payload['timestamp'] ?? '') .
-            (string) ($payload['processor_response_id'] ?? '') .
-            (string) ($payload['processor_response_authcode'] ?? '') .
-            (string) ($payload['pay_reference'] ?? '') .
+            $this->requestId($payload) .
+            $this->value($payload, 'response_id', 'responseid') .
+            $this->value($payload, 'gateway_id', 'gatewayid') .
+            $this->responseCode($payload) .
+            $this->value($payload, 'response_message', 'responsemessage') .
+            $this->value($payload, 'response_advise', 'responseadvise') .
+            $this->value($payload, 'timestamp', 'Timestamp') .
+            $this->value($payload, 'processor_response_id', 'processorresponseid') .
+            $this->value($payload, 'processor_response_authcode', 'processorresponseauthcode') .
+            $this->value($payload, 'pay_reference', 'payreference') .
             (string) ($payload['redirect_url'] ?? '') .
             (string) config('paynamics.merchant_key');
 
@@ -323,12 +349,12 @@ class PaynamicsService
         $amount = $this->money($transaction->grand_total);
 
         $notificationUrl = $this->notificationUrl();
-        $responseUrl = $this->responseUrl();
-        $cancelUrl = $this->cancelUrl();
+        $responseUrl = $this->responseUrl($requestId);
+        $cancelUrl = $this->cancelUrl($requestId);
 
         $collectionMethod = 'single_pay';
-        $notificationStatus = '0';
-        $notificationChannel = '1';
+        $notificationStatus = (string) config('paynamics.notification_status', '1');
+        $notificationChannel = (string) config('paynamics.notification_channel', '1');
 
         $dob = $customer->birth_date
             ? date('Y-m-d', strtotime((string) $customer->birth_date))
@@ -514,9 +540,20 @@ class PaynamicsService
         return $requestId;
     }
 
-    private function statusForResponseCode(string $responseCode): string
+    private function statusForResponseCode(string $responseCode, bool $fromHostedReturn = false): string
     {
         if (in_array($responseCode, self::SUCCESS_CODES, true)) {
+            return 'paid';
+        }
+
+        /*
+         * Paynamics test cards often show "Payment Success" while the merchant
+         * dashboard stays on GR033 until a later settlement IPN. The hosted
+         * return is the customer completing checkout, so treat it as paid.
+         * GR033 on the initial RPF/IPN remains pending so unpaid redirects
+         * are not marked paid early.
+         */
+        if ($fromHostedReturn && in_array($responseCode, self::HOSTED_SUCCESS_CODES, true)) {
             return 'paid';
         }
 
@@ -574,18 +611,32 @@ class PaynamicsService
         );
     }
 
-    private function responseUrl(): string
+    private function responseUrl(?string $requestId = null): string
     {
-        return (string) (
-            config('paynamics.response_url') ?: route('paynamics.return')
+        return $this->callbackUrl(
+            (string) (config('paynamics.response_url') ?: route('paynamics.return')),
+            $requestId
         );
     }
 
-    private function cancelUrl(): string
+    private function cancelUrl(?string $requestId = null): string
     {
-        return (string) (
-            config('paynamics.cancel_url') ?: route('paynamics.cancel')
+        return $this->callbackUrl(
+            (string) (config('paynamics.cancel_url') ?: route('paynamics.cancel')),
+            $requestId
         );
+    }
+
+    private function callbackUrl(string $url, ?string $requestId = null): string
+    {
+        $url = trim($url);
+        if ($url === '' || !$requestId) {
+            return $url;
+        }
+
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return $url . $separator . 'request_id=' . rawurlencode($requestId);
     }
 
     private function billingCity(User $customer): string
@@ -611,13 +662,80 @@ class PaynamicsService
 
     private function unwrapPayload(array $payload): array
     {
-        foreach (['response', 'transaction', 'data'] as $key) {
-            if (isset($payload[$key]) && is_array($payload[$key])) {
-                return $payload[$key];
+        if (!empty($payload['data1']) && is_string($payload['data1'])) {
+            $decoded = $this->decodeEmbeddedPayload($payload['data1']);
+            if ($decoded) {
+                $payload = array_merge($decoded, $payload);
+            }
+        }
+
+        foreach (['response', 'transaction', 'data', 'payment_response', 'paymentresponse'] as $key) {
+            $nested = $payload[$key] ?? null;
+            if (is_array($nested)) {
+                return array_merge($payload, $nested);
+            }
+            if (is_string($nested) && $nested !== '') {
+                $decoded = $this->decodeEmbeddedPayload($nested);
+                if ($decoded) {
+                    return array_merge($payload, $decoded);
+                }
             }
         }
 
         return $payload;
+    }
+
+    private function decodeEmbeddedPayload(string $raw): ?array
+    {
+        $value = trim($raw);
+        if ($value === '') {
+            return null;
+        }
+
+        $json = json_decode($value, true);
+        if (is_array($json)) {
+            return $json;
+        }
+
+        $fromQuery = [];
+        parse_str($value, $fromQuery);
+        if (isset($fromQuery['response_code']) || isset($fromQuery['request_id'])) {
+            return $fromQuery;
+        }
+
+        if (preg_match('/^[0-9a-fA-F]+$/', $value) && strlen($value) % 2 === 0) {
+            $binary = @hex2bin($value);
+            if (is_string($binary) && $binary !== '') {
+                $fromHex = json_decode($binary, true);
+                if (is_array($fromHex)) {
+                    return $fromHex;
+                }
+            }
+        }
+
+        $fromBase64 = json_decode(base64_decode($value, true) ?: '', true);
+        return is_array($fromBase64) ? $fromBase64 : null;
+    }
+
+    private function requestId(array $payload): string
+    {
+        return trim((string) (
+            $payload['request_id']
+            ?? $payload['requestid']
+            ?? $payload['RequestId']
+            ?? $payload['org_trxid']
+            ?? ''
+        ));
+    }
+
+    private function responseCode(array $payload): string
+    {
+        return strtoupper(trim((string) (
+            $payload['response_code']
+            ?? $payload['responsecode']
+            ?? $payload['ResponseCode']
+            ?? ''
+        )));
     }
 
     private function value(array $payload, string $primary, string $legacy): string

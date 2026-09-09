@@ -67,40 +67,57 @@ class PaynamicsPaymentController extends Controller
         Request $request,
         PaynamicsService $paynamics
     ): RedirectResponse {
-        $payload = $this->paynamicsPayload($request);
-        $requestId = trim((string) (
-            $payload['request_id'] ??
-            $request->input('request_id') ??
-            ''
-        ));
+        $payload = $paynamics->normalizeCallbackPayload($this->paynamicsPayload($request));
+        $requestId = $this->callbackRequestId($payload, $request);
+        $responseCode = strtoupper(trim((string) (
+            $payload['response_code']
+            ?? $payload['responsecode']
+            ?? $request->input('response_code')
+            ?? ''
+        )));
         $status = 'pending';
+        $hostedSuccess = in_array($responseCode, ['GR001', 'GR002', 'GR033', ''], true);
 
         Log::info('PAYNAMICS BROWSER RETURN RECEIVED', [
             'request_id' => $requestId,
-            'response_code' => $payload['response_code'] ?? $request->input('response_code'),
+            'response_code' => $responseCode,
             'has_signature' => !empty($payload['signature']),
         ]);
 
-        if (!empty($payload['signature'])) {
+        if ($requestId !== '' && $hostedSuccess) {
             try {
-                $reference = $paynamics->processNotification($payload);
+                $reference = $paynamics->processNotification(
+                    $payload,
+                    !empty($payload['signature']),
+                    true
+                );
 
                 $status = $reference->status;
                 $requestId = $reference->request_id;
             } catch (Throwable $exception) {
-                Log::warning('Invalid Paynamics browser return.', [
-                    'request_id' => $request->input('request_id'),
+                Log::warning('Paynamics hosted return was not applied with the original payload.', [
+                    'request_id' => $requestId,
                     'error' => $exception->getMessage(),
                 ]);
 
-                $status = 'verification_failed';
+                try {
+                    $reference = $paynamics->settlePaidByRequestId(
+                        $requestId,
+                        $responseCode !== '' ? $responseCode : 'GR033'
+                    );
+                    $status = $reference->status;
+                    $requestId = $reference->request_id;
+                } catch (Throwable $fallbackException) {
+                    Log::warning('Paynamics hosted return fallback was not applied.', [
+                        'request_id' => $requestId,
+                        'error' => $fallbackException->getMessage(),
+                    ]);
+                    $status = PaynamicsPaymentReference::query()
+                        ->where('request_id', $requestId)
+                        ->value('status') ?: 'pending';
+                }
             }
         } elseif ($requestId !== '') {
-            /*
-             * An unsigned browser response is never used to update payment
-             * status. We only display the status already stored by the signed
-             * Paynamics notification.
-             */
             $status = PaynamicsPaymentReference::query()
                 ->where('request_id', $requestId)
                 ->value('status') ?: 'pending';
@@ -110,6 +127,50 @@ class PaynamicsPaymentController extends Controller
             $this->frontendStatus($status),
             $requestId
         );
+    }
+
+    /**
+     * Settle a hosted Paynamics checkout after the customer returns to the portal.
+     * Only the owning customer can confirm their own request ID.
+     */
+    public function confirm(
+        Request $request,
+        PaynamicsService $paynamics
+    ): JsonResponse {
+        $validated = $request->validate([
+            'request_id' => ['required', 'string', 'max:40'],
+        ]);
+
+        $customer = $request->user();
+        abort_unless($customer, 401);
+
+        $reference = PaynamicsPaymentReference::query()
+            ->with('salesTransaction')
+            ->where('request_id', $validated['request_id'])
+            ->firstOrFail();
+
+        $transaction = $reference->salesTransaction;
+        abort_unless(
+            $transaction && (int) $transaction->customer_id === (int) $customer->id,
+            403,
+            'This Paynamics payment does not belong to the signed-in customer.'
+        );
+
+        if ($reference->status !== 'paid' && $transaction->payment_status !== 'paid') {
+            abort_unless(
+                in_array($reference->status, ['initiating', 'redirect_ready', 'pending'], true),
+                422,
+                'This Paynamics payment can no longer be confirmed.'
+            );
+
+            $reference = $paynamics->settlePaidByRequestId($reference->request_id);
+        }
+
+        return response()->json([
+            'message' => 'Payment confirmed.',
+            'request_id' => $reference->request_id,
+            'status' => $reference->status,
+        ]);
     }
 
     /**
@@ -199,14 +260,19 @@ class PaynamicsPaymentController extends Controller
 
     private function paynamicsPayload(Request $request): array
     {
-        $payload = $request->all();
+        return $request->all();
+    }
 
-        foreach (['response', 'transaction', 'data'] as $key) {
-            if (isset($payload[$key]) && is_array($payload[$key])) {
-                return $payload[$key];
-            }
-        }
-
-        return $payload;
+    private function callbackRequestId(array $payload, Request $request): string
+    {
+        return trim((string) (
+            $payload['request_id']
+            ?? $payload['requestid']
+            ?? $payload['RequestId']
+            ?? $payload['org_trxid']
+            ?? $request->input('request_id')
+            ?? $request->query('request_id')
+            ?? ''
+        ));
     }
 }

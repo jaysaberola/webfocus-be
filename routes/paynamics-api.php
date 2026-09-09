@@ -12,6 +12,10 @@ Route::middleware('auth:sanctum')->group(function () {
         '/public/paynamics/checkout',
         [SalesTransactionController::class, 'checkoutWithPaynamics']
     )->name('paynamics.checkout');
+    Route::post(
+        '/public/paynamics/confirm',
+        [PaynamicsPaymentController::class, 'confirm']
+    )->name('paynamics.confirm');
 });
 
 /*

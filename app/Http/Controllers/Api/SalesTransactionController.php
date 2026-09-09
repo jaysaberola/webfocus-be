@@ -173,14 +173,6 @@ class SalesTransactionController extends Controller
         );
         unset($validated['client_owner_id']);
 
-        $transaction = DB::transaction(function () use ($validated, $items) {
-            $transaction = SalesTransaction::create($validated);
-            $this->syncItems($transaction, $items);
-            app(ClientOwnerRotator::class)->assign($transaction);
-
-            return $transaction->fresh(['items']);
-        });
-
         try {
             [$transaction, $gateway] = DB::transaction(function () use (
                 $validated,
