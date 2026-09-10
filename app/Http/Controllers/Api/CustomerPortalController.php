@@ -620,7 +620,7 @@ class CustomerPortalController extends Controller
 
         $validated = $request->validate([
             'fname' => ['required', 'string', 'max:255'],
-            'lname' => ['required', 'string', 'max:255'],
+            'lname' => ['nullable', 'string', 'max:255'],
             'mobile' => ['nullable', 'string', 'max:60'],
             'mname' => ['nullable', 'string', 'max:255'],
             'address_country' => ['nullable', 'string', 'max:255'],
@@ -642,7 +642,7 @@ class CustomerPortalController extends Controller
 
         $requestedPayload = [
             'fname' => $validated['fname'],
-            'lname' => $validated['lname'],
+            'lname' => trim((string) ($validated['lname'] ?? '')),
             'mobile' => $validated['mobile'] ?? null,
             'mname' => $validated['mname'] ?? null,
             'address_country' => $validated['address_country'] ?? null,
