@@ -76,12 +76,30 @@ class CommerceAdminController extends Controller
             if ($ownerEmails->isEmpty()) {
                 $ownerEmails = collect(config('commerce.rotating_client_owners', []))->filter()->values();
             }
-            $users->whereIn('email', $ownerEmails);
-            $records = $users
+
+            $records = User::query()
+                ->with('roles')
+                ->where('is_active', true)
+                ->where(function ($query) use ($ownerEmails) {
+                    $query->whereHas('roles', function ($roleQuery) {
+                        $roleQuery->whereIn('name', ['sales_staff', 'sales_admin']);
+                    });
+                    if ($ownerEmails->isNotEmpty()) {
+                        $query->orWhereIn('email', $ownerEmails);
+                    }
+                })
+                ->whereDoesntHave('roles', function ($query) {
+                    $query->where('name', 'customer');
+                })
                 ->get()
+                ->unique('id')
                 ->sortBy(function (User $user) use ($ownerEmails) {
                     $index = $ownerEmails->search(fn ($email) => strcasecmp((string) $email, (string) $user->email) === 0);
-                    return $index === false ? 999 : $index;
+                    if ($index !== false) {
+                        return $index;
+                    }
+
+                    return 100 + strtolower(trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')));
                 })
                 ->values();
         } else {
@@ -126,7 +144,7 @@ class CommerceAdminController extends Controller
             abort_unless(
                 app(ClientOwnerRotator::class)->isAllowedSalesAssignee($assignee),
                 422,
-                'Web design orders must be assigned to a Client Owner from the Customer Care list.'
+                'Web design orders must be assigned to an active Sales Staff account.'
             );
         }
 
@@ -217,10 +235,11 @@ class CommerceAdminController extends Controller
         abort_unless($customer->hasRole('customer'), 404, 'Customer not found.');
 
         $rotator = app(ClientOwnerRotator::class);
-        $kind = strtolower(trim((string) $request->query('kind', '')));
-        $payload = in_array($kind, ['web_design', 'web_dev', 'web_development'], true)
-            ? $rotator->nextSalesStaffPayload()
-            : $rotator->nextOwnerPayload((int) $customer->id);
+        /*
+         * Prefer the customer's existing owner. Rotation only applies when
+         * the account has no owner yet (same as new registration).
+         */
+        $payload = $rotator->nextOwnerPayload((int) $customer->id);
 
         return response()->json(['data' => $payload]);
     }

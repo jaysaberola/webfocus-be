@@ -4,48 +4,40 @@ namespace App\Services;
 
 use App\Models\SalesTransaction;
 use App\Models\User;
-use App\Support\WebDesignQuotation;
 use Illuminate\Support\Collection;
 
 class ClientOwnerRotator
 {
     /**
-     * Assign a client owner to a new order.
-     * Pass $explicitOwnerId when staff picked someone in the form.
+     * Attach a Client Owner / Sales Staff to a new order.
      *
-     * Web design / web development orders rotate Client Owner between
-     * Myrna Glorioso and Michelle Durian and do not change the customer's
-     * account owner. Other orders use the same pair per client and update
-     * users.owner_id.
+     * Rotation happens only on new customer registration.
+     * Later orders reuse that customer's existing owner — they do not rotate.
+     * Pass $explicitOwnerId when staff picked someone in the form.
      */
     public function assign(SalesTransaction $transaction, ?int $explicitOwnerId = null): ?User
     {
         $transaction->loadMissing('items');
 
-        if (WebDesignQuotation::isWebDesign($transaction)) {
-            return $this->assignSalesStaff($transaction, $explicitOwnerId);
+        $owner = $this->salesAssigneeFromExplicit($explicitOwnerId)
+            ?: $this->existingCustomerOwner((int) ($transaction->customer_id ?? 0))
+            ?: $this->assignOwnerToCustomerIfMissing((int) ($transaction->customer_id ?? 0));
+
+        if (! $owner) {
+            return null;
         }
 
-        return $this->assignRotatingOwner($transaction, $explicitOwnerId);
+        $transaction->update([
+            'client_owner_id' => $owner->id,
+            'user_id' => $owner->id,
+        ]);
+
+        return $owner;
     }
 
     public function nextOwner(int $customerId): ?User
     {
-        $pair = $this->rotatingOwners();
-        if ($pair->isEmpty()) {
-            return null;
-        }
-
-        if ($pair->count() === 1) {
-            return $pair->first();
-        }
-
-        $lastOwnerId = $this->lastAssignedOwnerId($customerId);
-        if ($lastOwnerId && (int) $pair->get(0)?->id === (int) $lastOwnerId) {
-            return $pair->get(1, $pair->first());
-        }
-
-        return $pair->first();
+        return $this->existingCustomerOwner($customerId) ?: $this->nextSalesStaff();
     }
 
     public function nextOwnerPayload(int $customerId): ?array
@@ -53,6 +45,10 @@ class ClientOwnerRotator
         return $this->userPayload($this->nextOwner($customerId));
     }
 
+    /**
+     * Next rotating sales staff for a brand-new registration only.
+     * Alternates across recent customer registrations (not orders).
+     */
     public function nextSalesStaff(?int $exceptTransactionId = null): ?User
     {
         $staff = $this->rotatingSalesStaff();
@@ -64,7 +60,7 @@ class ClientOwnerRotator
             return $staff->first();
         }
 
-        $lastOwnerId = $this->lastWebDesignSalesOwnerId($exceptTransactionId);
+        $lastOwnerId = $this->lastRegisteredCustomerOwnerId();
         $index = $lastOwnerId
             ? $staff->search(fn (User $user) => (int) $user->id === (int) $lastOwnerId)
             : false;
@@ -83,11 +79,11 @@ class ClientOwnerRotator
      */
     public function rotatingOwners(): Collection
     {
-        return $this->usersByConfiguredEmails(config('commerce.rotating_client_owners', []));
+        return $this->rotatingSalesStaff();
     }
 
     /**
-     * The two rotating sales owners (Myrna / Michelle). Falls back to
+     * The rotating sales owners (Myrna / Michelle by default). Falls back to
      * rotating_client_owners when rotating_sales_staff is empty.
      *
      * @return Collection<int, User>
@@ -112,50 +108,73 @@ class ClientOwnerRotator
             return true;
         }
 
-        $ownerEmails = collect(config('commerce.client_owners', []))
-            ->pluck('email')
+        $staffEmails = $this->rotatingSalesStaff()
+            ->map(fn (User $staff) => strtolower((string) $staff->email))
             ->filter()
-            ->map(fn ($email) => strtolower(trim((string) $email)));
+            ->values();
 
-        return $ownerEmails->contains(strtolower((string) $user->email));
+        return $staffEmails->contains(strtolower((string) $user->email));
     }
 
-    private function assignSalesStaff(SalesTransaction $transaction, ?int $explicitOwnerId): ?User
+    /**
+     * Assign the next rotating sales staff when a customer first registers.
+     * This is the only place that advances the Myrna ↔ Michelle rotation.
+     */
+    public function assignOwnerToNewCustomer(User $customer): ?User
     {
-        $owner = $this->salesAssigneeFromExplicit($explicitOwnerId)
-            ?: $this->nextSalesStaff($transaction->id);
+        if (! $customer->hasRole('customer')) {
+            return null;
+        }
 
+        if ((int) ($customer->owner_id ?? 0) > 0) {
+            return User::query()->find($customer->owner_id);
+        }
+
+        $owner = $this->nextSalesStaff();
         if (! $owner) {
             return null;
         }
 
-        $transaction->update([
-            'client_owner_id' => $owner->id,
-            'user_id' => $owner->id,
-        ]);
+        $customer->update(['owner_id' => $owner->id]);
 
         return $owner;
     }
 
-    private function assignRotatingOwner(SalesTransaction $transaction, ?int $explicitOwnerId): ?User
+    private function existingCustomerOwner(int $customerId): ?User
     {
-        $customerId = (int) ($transaction->customer_id ?? 0);
         if ($customerId <= 0) {
             return null;
         }
 
-        $owner = $explicitOwnerId
-            ? User::query()->find($explicitOwnerId)
-            : $this->nextOwner($customerId);
-
-        if (! $owner) {
+        $ownerId = (int) (User::query()->whereKey($customerId)->value('owner_id') ?? 0);
+        if ($ownerId <= 0) {
             return null;
         }
 
-        $transaction->update(['client_owner_id' => $owner->id]);
-        User::query()->whereKey($customerId)->update(['owner_id' => $owner->id]);
+        $owner = User::query()->with('roles')->find($ownerId);
+        if (! $owner || ! $owner->is_active) {
+            return null;
+        }
 
         return $owner;
+    }
+
+    /**
+     * Fallback for older customers with no owner yet: assign once via rotation,
+     * then keep that owner for future orders.
+     */
+    private function assignOwnerToCustomerIfMissing(int $customerId): ?User
+    {
+        if ($customerId <= 0) {
+            return null;
+        }
+
+        $customer = User::query()->with('roles')->find($customerId);
+        if (! $customer || ! $customer->hasRole('customer')) {
+            return null;
+        }
+
+        return $this->assignOwnerToNewCustomer($customer);
     }
 
     private function salesAssigneeFromExplicit(?int $explicitOwnerId): ?User
@@ -201,51 +220,23 @@ class ClientOwnerRotator
             ->values();
     }
 
-    private function lastAssignedOwnerId(int $customerId): ?int
-    {
-        $fromOrder = SalesTransaction::query()
-            ->where('customer_id', $customerId)
-            ->whereNotNull('client_owner_id')
-            ->latest('id')
-            ->value('client_owner_id');
-
-        if ($fromOrder) {
-            return (int) $fromOrder;
-        }
-
-        $fromClient = User::query()->whereKey($customerId)->value('owner_id');
-
-        return $fromClient ? (int) $fromClient : null;
-    }
-
-    private function lastWebDesignSalesOwnerId(?int $exceptTransactionId = null): ?int
+    /**
+     * Last rotating sales staff assigned on customer registration.
+     */
+    private function lastRegisteredCustomerOwnerId(): ?int
     {
         $staffIds = $this->rotatingSalesStaff()->pluck('id')->map(fn ($id) => (int) $id)->all();
         if ($staffIds === []) {
             return null;
         }
 
-        $recent = SalesTransaction::query()
-            ->with('items')
-            ->when($exceptTransactionId, fn ($query) => $query->where('id', '!=', $exceptTransactionId))
+        $fromRegistration = User::query()
+            ->role('customer')
+            ->whereIn('owner_id', $staffIds)
             ->latest('id')
-            ->limit(80)
-            ->get();
+            ->value('owner_id');
 
-        foreach ($recent as $row) {
-            if (! WebDesignQuotation::isWebDesign($row)) {
-                continue;
-            }
-
-            $ownerId = (int) ($row->client_owner_id ?: $row->user_id);
-            if ($ownerId && in_array($ownerId, $staffIds, true)) {
-                return $ownerId;
-            }
-
-            return null;
-        }
-
-        return null;
+        return $fromRegistration ? (int) $fromRegistration : null;
     }
 
     private function userPayload(?User $owner): ?array

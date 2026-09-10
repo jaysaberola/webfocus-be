@@ -15,9 +15,9 @@ return [
     ],
 
     /*
-    | These two staff accounts take turns as Client Owner on each new order
-    | from the same client. Change the emails here to swap the pair.
-    | Order 1 → first person, order 2 → second person, order 3 → first, and so on.
+    | These two staff accounts take turns as Client Owner / Sales Staff
+    | only when a customer first registers. Later orders keep that same owner.
+    | Change the emails here to swap the pair.
     */
     'rotating_client_owners' => [
         'myrna@webfocus.ph',
@@ -25,8 +25,8 @@ return [
     ],
 
     /*
-    | New web design / web development orders rotate Client Owner between
-    | these two staff accounts only. Same pair as rotating_client_owners.
+    | Same rotating pair used only for new customer registration.
+    | New service orders reuse the customer's already-assigned owner.
     */
     'rotating_sales_staff' => [
         'myrna@webfocus.ph',

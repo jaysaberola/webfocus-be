@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use App\Http\Resources\Auth\LoginResource;
 use App\Models\User;
+use App\Services\ClientOwnerRotator;
 use Spatie\Permission\Models\Role;
 
 class AuthController extends Controller
@@ -73,6 +74,9 @@ class AuthController extends Controller
             'is_active' => true,
         ]);
         $user->assignRole(self::CUSTOMER_ROLE);
+        $user->load('roles');
+        app(ClientOwnerRotator::class)->assignOwnerToNewCustomer($user);
+        $user->refresh();
 
         $token = $user->createToken('cms-customer')->plainTextToken;
 
