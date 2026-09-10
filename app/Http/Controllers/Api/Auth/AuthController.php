@@ -65,11 +65,18 @@ class AuthController extends Controller
             ['description' => 'Customer']
         );
 
+        $fname = trim((string) $validated['fname']);
+        $lname = trim((string) ($validated['lname'] ?? ''));
+        if (User::isPlaceholderLastName($lname)) {
+            $lname = '';
+        }
+
         $user = User::create([
-            'fname' => $validated['fname'],
-            'lname' => trim((string) ($validated['lname'] ?? '')),
+            'fname' => $fname,
+            'lname' => $lname,
             'email' => $validated['email'],
             'mobile' => $validated['mobile'] ?? null,
+            'contact_person' => $fname,
             'password' => Hash::make($validated['password']),
             'is_active' => true,
         ]);

@@ -80,9 +80,25 @@ class User extends Authenticatable implements AuditableContract
         'is_active'         => 'boolean',
     ];
 
+    public static function isPlaceholderLastName(?string $lname): bool
+    {
+        return (bool) preg_match('/^(customer|user)$/i', trim((string) $lname));
+    }
+
+    public static function sanitizePersonName(?string $name): string
+    {
+        $value = trim(preg_replace('/\s+/', ' ', (string) $name) ?? '');
+        $value = preg_replace('/\s+(Customer|User)$/i', '', $value) ?? $value;
+
+        return trim($value);
+    }
+
     public function getFullNameAttribute(): string
     {
-        return trim("{$this->fname} {$this->mname} {$this->lname}");
+        $last = self::isPlaceholderLastName($this->lname) ? '' : trim((string) ($this->lname ?? ''));
+
+        // mname is company in this CRM — keep it out of the person display name.
+        return trim(preg_replace('/\s+/', ' ', trim((string) ($this->fname ?? '')) . ' ' . $last) ?? '');
     }
 
     public function owner()

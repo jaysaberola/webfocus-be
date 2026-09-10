@@ -106,7 +106,7 @@ class CustomerController extends Controller
                     'client_classification' => $customer->client_classification,
                     'client_type' => $customer->client_type,
                     'billing_in_charge' => $customer->billing_in_charge,
-                    'contact_person' => $customer->contact_person,
+                    'contact_person' => User::sanitizePersonName($customer->contact_person) ?: $customer->full_name,
                     'website' => $customer->website,
                     'service_name' => $serviceSummary['service_name'],
                     'plan_name' => $serviceSummary['plan_name'],
@@ -372,7 +372,7 @@ class CustomerController extends Controller
             'data' => array_merge([
                 'id' => $customer->id,
                 'fname' => $customer->fname,
-                'lname' => $customer->lname,
+                'lname' => User::isPlaceholderLastName($customer->lname) ? '' : $customer->lname,
                 'company' => $customer->mname,
                 'email' => $customer->email,
                 'mobile' => $customer->mobile,
@@ -641,23 +641,26 @@ class CustomerController extends Controller
      */
     private function resolveContactNames(array $validated, ?User $existing = null): array
     {
-        $contact = trim((string) ($validated['contact_person'] ?? ''));
+        $contact = User::sanitizePersonName($validated['contact_person'] ?? '');
         if ($contact !== '') {
             $parts = preg_split('/\s+/', $contact, 2) ?: [];
             $fname = $parts[0] ?? 'Client';
-            $lname = $parts[1] ?? ($validated['company'] ?? 'Account');
+            $lname = $parts[1] ?? '';
+            if (User::isPlaceholderLastName($lname)) {
+                $lname = '';
+            }
 
             return [$fname, $lname];
         }
 
         $fname = trim((string) ($validated['fname'] ?? $existing?->fname ?? ''));
         $lname = trim((string) ($validated['lname'] ?? $existing?->lname ?? ''));
+        if (User::isPlaceholderLastName($lname)) {
+            $lname = '';
+        }
 
         if ($fname === '') {
             $fname = 'Client';
-        }
-        if ($lname === '') {
-            $lname = (string) ($validated['company'] ?? $existing?->mname ?? 'Account');
         }
 
         return [$fname, $lname];
@@ -730,7 +733,7 @@ class CustomerController extends Controller
             'workdrive_folder_id' => $customer->workdrive_folder_id,
             'client_classification' => $customer->client_classification,
             'client_type' => $customer->client_type,
-            'contact_person' => $customer->contact_person,
+            'contact_person' => User::sanitizePersonName($customer->contact_person) ?: $customer->full_name,
             'website' => $customer->website,
             'ownership' => $customer->ownership,
             'billing_in_charge' => $customer->billing_in_charge,
