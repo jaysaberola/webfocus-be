@@ -85,7 +85,7 @@ class CustomerController extends Controller
 
                 return [
                     'id' => $customer->id,
-                    'name' => $customer->mname ?: $customer->full_name,
+                    'name' => $customer->mname ?: null,
                     'representative' => $customer->full_name,
                     'company' => $customer->mname,
                     'email' => $customer->email,

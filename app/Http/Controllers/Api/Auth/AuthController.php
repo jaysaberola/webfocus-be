@@ -58,6 +58,7 @@ class AuthController extends Controller
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
             'mobile' => ['nullable', 'string', 'max:60'],
+            'company' => ['nullable', 'string', 'max:255'],
         ]);
 
         Role::firstOrCreate(
@@ -67,6 +68,7 @@ class AuthController extends Controller
 
         $fname = trim((string) $validated['fname']);
         $lname = trim((string) ($validated['lname'] ?? ''));
+        $company = trim((string) ($validated['company'] ?? ''));
         if (User::isPlaceholderLastName($lname)) {
             $lname = '';
         }
@@ -74,6 +76,7 @@ class AuthController extends Controller
         $user = User::create([
             'fname' => $fname,
             'lname' => $lname,
+            'mname' => $company !== '' ? $company : null,
             'email' => $validated['email'],
             'mobile' => $validated['mobile'] ?? null,
             'contact_person' => $fname,
