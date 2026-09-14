@@ -152,8 +152,8 @@ class SalesTransactionController extends Controller
         );
 
         $validated['customer_id'] = $customer->id;
-        $validated['customer_name'] = trim(
-            (string) ($customer->mname ?: trim("{$customer->fname} {$customer->lname}"))
+        $validated['customer_name'] = User::sanitizePersonName(
+            trim((string) ($customer->mname ?: '')) ?: $customer->full_name
         );
         $validated['customer_email'] = $customer->email;
         $validated['transaction_no'] =
@@ -539,9 +539,10 @@ class SalesTransactionController extends Controller
         if (!empty($payload['customer_id'])) {
             $customer = User::find($payload['customer_id']);
             if ($customer) {
-                $payload['customer_name'] =
+                $payload['customer_name'] = User::sanitizePersonName(
                     ($payload['customer_name'] ?? null)
-                    ?: (trim((string) $customer->mname) ?: $customer->full_name);
+                    ?: (trim((string) $customer->mname) ?: $customer->full_name)
+                );
                 $payload['customer_email'] =
                     ($payload['customer_email'] ?? null) ?: $customer->email;
             }

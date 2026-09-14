@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Password;
@@ -55,7 +56,7 @@ class AccountController extends Controller
     {
         $request->validate([
             'fname'  => 'required|string|max:255',
-            'lname'  => 'required|string|max:255',
+            'lname'  => 'nullable|string|max:255',
             'mobile' => 'nullable|string|max:60',
             'birth_date' => 'nullable|date',
             'address_street' => 'nullable|string|max:255',
@@ -83,7 +84,13 @@ class AccountController extends Controller
         }
 
         $user->fname = $request->fname;
-        $user->lname = $request->lname;
+        $lname = $request->exists('lname')
+            ? trim((string) $request->input('lname'))
+            : trim((string) ($user->lname ?? ''));
+        if (User::isPlaceholderLastName($lname)) {
+            $lname = '';
+        }
+        $user->lname = $lname;
         if ($request->exists('mobile')) {
             $user->mobile = $request->mobile;
         }

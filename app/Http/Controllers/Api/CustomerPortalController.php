@@ -883,7 +883,9 @@ class CustomerPortalController extends Controller
         $transaction = SalesTransaction::create([
             'transaction_no' => $this->generateTransactionNo(),
             'customer_id' => $customer->id,
-            'customer_name' => trim($customer->fname . ' ' . $customer->lname),
+            'customer_name' => User::sanitizePersonName(
+                trim((string) ($customer->mname ?: '')) ?: $customer->full_name
+            ),
             'customer_email' => $customer->email,
             'subtotal' => $amount,
             'discount_total' => 0,
