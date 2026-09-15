@@ -13,9 +13,12 @@ use App\Services\ClientOwnerRotator;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
+use App\Support\PendingCheckoutGuard;
 use App\Support\StorageUrl;
+use App\Support\TransactionLabelResolver;
 use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
@@ -166,12 +169,79 @@ class SalesTransactionController extends Controller
         $validated['payment_status'] = 'pending';
         $validated['order_status'] = 'pending';
         $validated['user_id'] = $customer->id;
+        unset($validated['client_owner_id']);
+
+        $guard = app(PendingCheckoutGuard::class);
+        $reusable = $guard->reusablePending($customer, $items, (float) $validated['grand_total']);
+        if ($reusable) {
+            $guard->collapseExactDuplicates($customer, $reusable);
+            $validated['notes'] = $this->combinedCheckoutNotes(
+                $validated['notes'] ?? null,
+                $reusable->transaction_no,
+                $items
+            );
+
+            try {
+                $gateway = $paynamics->initiate(
+                    $this->prepareReusableCheckout($reusable, $validated['notes']),
+                    $customer,
+                    $request->ip(),
+                    $request->userAgent()
+                );
+            } catch (Throwable $exception) {
+                report($exception);
+
+                $payload = [
+                    'message' => 'Your pending invoice was kept, but Paynamics could not be opened. Try continuing that payment again.',
+                    'data' => [
+                        'invoice_id' => PendingCheckoutGuard::invoiceId($reusable),
+                        'transaction_no' => $reusable->transaction_no,
+                    ],
+                ];
+
+                if (config('app.debug')) {
+                    $payload['error'] = $exception->getMessage();
+                }
+
+                return response()->json($payload, 502);
+            }
+
+            return response()->json([
+                'message' => 'You already have a pending Paynamics payment for '.PendingCheckoutGuard::invoiceId($reusable).'. Continuing that invoice instead of creating a new one.',
+                'reused' => true,
+                'data' => $reusable->fresh([
+                    'customer:id,fname,lname,email',
+                    'items',
+                ]),
+                'paynamics' => $gateway,
+            ]);
+        }
+
+        $overlapping = $guard->overlappingPending($customer, $items);
+        if ($overlapping) {
+            $invoiceId = PendingCheckoutGuard::invoiceId($overlapping);
+            $service = TransactionLabelResolver::serviceCategoryFromItems($overlapping->items);
+
+            return response()->json([
+                'message' => "You already have a pending Paynamics payment for {$service} ({$invoiceId}). Finish that payment instead of creating a new invoice.",
+                'errors' => [
+                    'checkout' => [
+                        "You already have a pending Paynamics payment for {$service} ({$invoiceId}). Finish that payment instead of creating a new invoice.",
+                    ],
+                ],
+                'data' => [
+                    'invoice_id' => $invoiceId,
+                    'transaction_no' => $overlapping->transaction_no,
+                    'service_name' => $service,
+                ],
+            ], 409);
+        }
+
         $validated['notes'] = $this->combinedCheckoutNotes(
             $validated['notes'] ?? null,
             $validated['transaction_no'],
             $items
         );
-        unset($validated['client_owner_id']);
 
         try {
             [$transaction, $gateway] = DB::transaction(function () use (
@@ -677,6 +747,17 @@ class SalesTransactionController extends Controller
         }
 
         return $header."\n".$current;
+    }
+
+    private function prepareReusableCheckout(SalesTransaction $transaction, string $notes): SalesTransaction
+    {
+        $transaction->update([
+            'payment_status' => 'pending',
+            'order_status' => 'pending',
+            'notes' => $notes,
+        ]);
+
+        return $transaction->fresh(['items']);
     }
 
     private function generateTransactionNo(): string

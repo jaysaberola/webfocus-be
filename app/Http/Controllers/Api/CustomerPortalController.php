@@ -12,6 +12,7 @@ use App\Models\SalesTransaction;
 use App\Models\SalesTransactionItem;
 use App\Models\SalesTransactionProposal;
 use App\Models\User;
+use App\Support\PendingCheckoutGuard;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
 use App\Support\WebDesignQuotation;
@@ -183,9 +184,18 @@ class CustomerPortalController extends Controller
     public function billing(Request $request)
     {
         $customer = $this->resolveCustomer($request);
+        app(PendingCheckoutGuard::class)->collapseAllDuplicates($customer);
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->where(function ($query) {
+                $query->whereNull('order_status')
+                    ->orWhereNotIn('order_status', ['cancelled', 'canceled']);
+            })
+            ->where(function ($query) {
+                $query->whereNull('payment_status')
+                    ->orWhereNotIn('payment_status', ['cancelled', 'canceled']);
+            })
             ->with(['items', 'proposals'])
             ->when($request->filled('date_from'), fn ($q) => $q->whereDate('transacted_at', '>=', $request->input('date_from')))
             ->when($request->filled('date_to'), fn ($q) => $q->whereDate('transacted_at', '<=', $request->input('date_to')))
@@ -195,6 +205,14 @@ class CustomerPortalController extends Controller
 
         $allTransactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->where(function ($query) {
+                $query->whereNull('order_status')
+                    ->orWhereNotIn('order_status', ['cancelled', 'canceled']);
+            })
+            ->where(function ($query) {
+                $query->whereNull('payment_status')
+                    ->orWhereNotIn('payment_status', ['cancelled', 'canceled']);
+            })
             ->with(['items', 'proposals'])
             ->latest('created_at')
             ->latest('id')
@@ -999,6 +1017,8 @@ class CustomerPortalController extends Controller
     private function mapInvoice(SalesTransaction $row): array
     {
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
+        $cancelled = in_array(strtolower((string) $row->payment_status), ['cancelled', 'canceled'], true)
+            || in_array(strtolower((string) $row->order_status), ['cancelled', 'canceled'], true);
         $firstItem = $row->items->first();
         $planLabel = TransactionLabelResolver::customerPlanFamilyFromItems($row->items, $firstItem?->name ?? $row->transaction_no);
         $dueAt = $row->transacted_at?->copy()->addDays(30);
@@ -1013,6 +1033,9 @@ class CustomerPortalController extends Controller
 
         if ($paid) {
             $status = 'Paid';
+        } elseif ($cancelled) {
+            $status = 'Cancelled';
+            $canPay = false;
         } elseif ($pendingQuotation) {
             $status = 'Pending Quotation';
         } elseif ($paymentSubmitted) {
@@ -1360,7 +1383,10 @@ class CustomerPortalController extends Controller
     private function buildBillingReminder(Collection $transactions): ?array
     {
         $pending = $transactions->filter(function (SalesTransaction $row) {
-            if (in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true)) {
+            if (in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success', 'cancelled', 'canceled'], true)) {
+                return false;
+            }
+            if (in_array(strtolower((string) $row->order_status), ['cancelled', 'canceled'], true)) {
                 return false;
             }
 
