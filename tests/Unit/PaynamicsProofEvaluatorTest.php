@@ -89,4 +89,25 @@ class PaynamicsProofEvaluatorTest extends TestCase
         $this->assertTrue($result['valid']);
         $this->assertSame('WF260915103045ABCDEFGH', $result['matched_request_id']);
     }
+
+    public function test_accepts_hosted_paynamics_success_page_without_brand_word(): void
+    {
+        $text = <<<TXT
+        Payment Success
+        WEBFOCUS SOLUTIONS, INC
+        Amount PHP 23,400.00
+        Request ID WF260915105840VHPNDTW3
+        Payment Date Sep 15, 2026 10:59 AM
+        Payment Method Credit Card
+        Payment Channel Unionbank of the Philippines
+        Go back to merchant
+        Have concerns on payment?
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate($text, 23400.00);
+
+        $this->assertTrue($result['valid']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
+        $this->assertTrue($result['has_brand']);
+    }
 }

@@ -28,7 +28,7 @@ class PaynamicsProofEvaluator
             );
         }
 
-        $hasBrand = self::hasBrand($normalized, $compact);
+        $hasBrand = self::hasBrand($normalized, $compact) || self::hasHostedSuccessPage($normalized, $compact);
         $matchedRequestId = self::matchedRequestId($compact, $requestIds);
         $hasAmount = self::hasAmount($text, $normalized, $amount);
         $hasSuccess = self::hasSuccess($normalized, $compact);
@@ -106,6 +106,25 @@ class PaynamicsProofEvaluator
             || (bool) preg_match('/pay\s*[-]?namics/', $normalized)
             || str_contains($normalized, 'hosted.paynamics')
             || str_contains($compact, 'paygatepaynamics');
+    }
+
+    /**
+     * Hosted Paynamics success receipts often show the merchant name and
+     * Request ID instead of the word "Paynamics".
+     */
+    private static function hasHostedSuccessPage(string $normalized, string $compact): bool
+    {
+        $hasSuccessTitle = str_contains($normalized, 'payment success')
+            || str_contains($compact, 'paymentsuccess');
+        $hasMerchant = str_contains($compact, 'webfocus')
+            || str_contains($compact, 'gobacktomerchant')
+            || str_contains($normalized, 'have concerns on payment');
+        $hasHostedFields = str_contains($compact, 'requestid')
+            || str_contains($normalized, 'payment channel')
+            || str_contains($normalized, 'payment method')
+            || (bool) preg_match('/wf[0-9]{12}[a-z0-9]{6,}/', $compact);
+
+        return $hasSuccessTitle && $hasMerchant && $hasHostedFields;
     }
 
     private static function hasSuccess(string $normalized, string $compact): bool

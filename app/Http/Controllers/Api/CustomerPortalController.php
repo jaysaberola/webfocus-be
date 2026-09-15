@@ -249,12 +249,7 @@ class CustomerPortalController extends Controller
         ]);
 
         $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
-        $this->assertInvoicePayable($transaction);
-        abort_if(
-            WebDesignQuotation::isPendingQuotation($transaction),
-            422,
-            'This web design order is still Pending Quotation. Wait for Sales to request payment before uploading proof.'
-        );
+        $this->assertInvoiceAllowsPaymentProof($transaction);
 
         $scan = app(PaynamicsProofScanner::class)->scan(
             $request->file('receipt'),
@@ -277,12 +272,7 @@ class CustomerPortalController extends Controller
         ]);
 
         $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
-        $this->assertInvoicePayable($transaction);
-        abort_if(
-            WebDesignQuotation::isPendingQuotation($transaction),
-            422,
-            'This web design order is still Pending Quotation. Wait for Sales to request payment before uploading proof.'
-        );
+        $this->assertInvoiceAllowsPaymentProof($transaction);
 
         $scan = app(PaynamicsProofScanner::class)->scan(
             $request->file('receipt'),
@@ -316,6 +306,12 @@ class CustomerPortalController extends Controller
 
         $file = $request->file('receipt');
         $path = $file->store('customer-payment-proofs/' . $customer->id, 'public');
+        $alreadyPaid = $this->isTransactionPaid($transaction);
+        $proofNotes = trim((string) ($validated['notes'] ?? ''));
+        if ($alreadyPaid && $proofNotes === '') {
+            $proofNotes = 'Submitted after Paynamics payment.';
+        }
+        $proofNotes = $proofNotes !== '' ? $proofNotes : null;
 
         if ($pendingProofs->isNotEmpty()) {
             $proof = $pendingProofs->first();
@@ -330,7 +326,7 @@ class CustomerPortalController extends Controller
             $proof->update([
                 'file_path' => $path,
                 'file_name' => $file->getClientOriginalName(),
-                'notes' => $validated['notes'] ?? $proof->notes,
+                'notes' => $proofNotes ?? $proof->notes,
                 'status' => 'Pending Review',
             ]);
 
@@ -345,17 +341,21 @@ class CustomerPortalController extends Controller
                 'file_path' => $path,
                 'file_name' => $file->getClientOriginalName(),
                 'status' => 'Pending Review',
-                'notes' => $validated['notes'] ?? null,
+                'notes' => $proofNotes,
             ]);
 
-            $message = 'Payment proof uploaded successfully';
+            $message = $alreadyPaid
+                ? 'Payment proof uploaded. Billing will review your Paynamics receipt.'
+                : 'Payment proof uploaded successfully';
             $statusCode = 201;
         }
 
         CustomerNotification::create([
             'customer_id' => $customer->id,
             'title' => $statusCode === 200 ? 'Payment Proof Updated' : 'Payment Proof Uploaded',
-            'body' => 'We received your payment proof for ' . $proof->invoice_id . '. Our billing team will verify it shortly.',
+            'body' => $alreadyPaid
+                ? 'We received your Paynamics payment proof for ' . $proof->invoice_id . '. Our billing team will confirm the receipt shortly.'
+                : 'We received your payment proof for ' . $proof->invoice_id . '. Our billing team will verify it shortly.',
             'type' => 'billing',
             'action_url' => '/public/dashboard?tab=billing',
         ]);
@@ -364,12 +364,16 @@ class CustomerPortalController extends Controller
             ? (string) $customer->mname
             : trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''))) ?: ($customer->email ?? 'Client');
 
+        $staffBody = $alreadyPaid
+            ? "{$clientLabel} already paid via Paynamics and uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}. Review the receipt in Approvals."
+            : "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}. Review it in Approvals.";
+
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             (int) $customer->id,
             ['finance_admin', 'sales_admin', 'sales_staff', 'admin', 'customer_care'],
             'admin:payment-proof:' . $proof->id,
-            'Payment Proof Pending Review',
-            "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}. Review it in Approvals.",
+            $alreadyPaid ? 'Paynamics Receipt Submitted' : 'Payment Proof Pending Review',
+            $staffBody,
             'payment_proof',
             '/public/commerce-admin?tab=approvals',
         );
@@ -381,8 +385,8 @@ class CustomerPortalController extends Controller
                     'reference_key' => 'admin:payment-proof:' . $proof->id,
                 ],
                 [
-                    'title' => 'Client Uploaded Proof of Payment',
-                    'body' => "{$clientLabel} uploaded payment proof {$proof->proof_no} for {$proof->invoice_id}. Review it in Approvals.",
+                    'title' => $alreadyPaid ? 'Client Submitted Paynamics Receipt' : 'Client Uploaded Proof of Payment',
+                    'body' => $staffBody,
                     'type' => 'payment_proof',
                     'action_url' => '/public/commerce-admin?tab=approvals',
                     'read_at' => null,
@@ -1376,8 +1380,24 @@ class CustomerPortalController extends Controller
 
     private function assertInvoicePayable(SalesTransaction $transaction): void
     {
-        $paid = in_array(strtolower((string) $transaction->payment_status), ['paid', 'completed', 'success'], true);
-        abort_if($paid, 422, 'This invoice is already paid.');
+        abort_if($this->isTransactionPaid($transaction), 422, 'This invoice is already paid.');
+    }
+
+    private function assertInvoiceAllowsPaymentProof(SalesTransaction $transaction): void
+    {
+        $cancelled = in_array(strtolower((string) $transaction->payment_status), ['cancelled', 'canceled'], true)
+            || in_array(strtolower((string) $transaction->order_status), ['cancelled', 'canceled'], true);
+        abort_if($cancelled, 422, 'Payment proof cannot be uploaded for a cancelled invoice.');
+        abort_if(
+            WebDesignQuotation::isPendingQuotation($transaction),
+            422,
+            'This web design order is still Pending Quotation. Wait for Sales to request payment before uploading proof.'
+        );
+    }
+
+    private function isTransactionPaid(SalesTransaction $transaction): bool
+    {
+        return in_array(strtolower((string) $transaction->payment_status), ['paid', 'completed', 'success'], true);
     }
 
     private function assertInvoiceCanPay(SalesTransaction $transaction): void

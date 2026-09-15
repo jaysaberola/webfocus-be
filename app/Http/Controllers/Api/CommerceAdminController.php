@@ -923,7 +923,18 @@ class CommerceAdminController extends Controller
             'amount' => $transaction ? WebDesignQuotation::displayAmount($transaction) : 0.0,
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($items),
             'plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
+            'alreadyPaid' => $transaction ? $this->isTransactionPaid($transaction) : false,
+            'invoiceStatus' => $transaction && $this->isTransactionPaid($transaction) ? 'Paid' : ($transaction?->payment_status ?: null),
         ];
+    }
+
+    private function isTransactionPaid(?SalesTransaction $transaction): bool
+    {
+        if (! $transaction) {
+            return false;
+        }
+
+        return in_array(strtolower((string) $transaction->payment_status), ['paid', 'completed', 'success'], true);
     }
 
     private function mapAdminTicket(CustomerSupportTicket $ticket): array
