@@ -1141,30 +1141,53 @@ class CustomerPortalController extends Controller
 
     private function extractPaymentMethod(?string $notes): string
     {
-        if (!$notes) {
-            return 'Paynamics IPG';
-        }
-
-        $trimmed = trim($notes);
-        if (!str_contains($trimmed, "\n") && strlen($trimmed) <= 40) {
-            return $trimmed;
+        $trimmed = trim((string) $notes);
+        if ($trimmed === '') {
+            return '—';
         }
 
         if (preg_match('/Payment method:\s*([^\n]+)/i', $trimmed, $matches)) {
             $line = trim($matches[1]);
-
+            $label = null;
             if (preg_match('/\(([^)]+)\)\s*$/', $line, $labelMatch)) {
-                return trim($labelMatch[1]);
+                $label = trim($labelMatch[1]);
             }
 
-            if (preg_match('/^Paynamics-(\w+)/i', $line, $idMatch)) {
-                return $this->formatPaymentMethodLabel(strtolower($idMatch[1]));
+            if (preg_match('/Paynamics-(\w+)/i', $line, $idMatch)) {
+                $label = $label ?: $this->formatPaymentMethodLabel(strtolower($idMatch[1]));
+
+                return $label !== '' ? 'Paynamics - '.$label : 'Paynamics';
+            }
+
+            if (stripos($line, 'paynamics') !== false) {
+                if ($label && !str_contains(strtolower($label), 'ipg')) {
+                    return 'Paynamics - '.$label;
+                }
+
+                return 'Paynamics';
+            }
+
+            return $label ?: $line;
+        }
+
+        if (preg_match('/Payment gateway:\s*([^\n]+)/i', $trimmed, $matches)) {
+            $line = trim($matches[1]);
+            if (stripos($line, 'paynamics') !== false) {
+                return 'Paynamics';
             }
 
             return $line;
         }
 
-        return 'Paynamics IPG';
+        if (stripos($trimmed, 'paynamics') !== false) {
+            return 'Paynamics';
+        }
+
+        if (preg_match('/\bquotation\b/i', $trimmed)) {
+            return '—';
+        }
+
+        return '—';
     }
 
     private function formatPaymentMethodLabel(string $methodId): string
@@ -1172,8 +1195,10 @@ class CustomerPortalController extends Controller
         return match (strtolower($methodId)) {
             'cc' => 'Credit / Debit Card',
             'gc' => 'GCash',
+            'ewallet' => 'E-Wallet',
             'bn' => 'Online Bank Transfer',
-            'ecpay' => 'Over-the-Counter',
+            'ecpay' => 'Online Bills Payment',
+            'installment' => 'Installment (Non-Credit Card)',
             default => ucwords(str_replace(['-', '_'], ' ', $methodId)),
         };
     }
