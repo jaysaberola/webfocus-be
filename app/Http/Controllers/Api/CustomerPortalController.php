@@ -965,7 +965,7 @@ class CustomerPortalController extends Controller
             'price' => (float) $item->total_price,
         ])->values()->all();
 
-        $planLabel = TransactionLabelResolver::planLabel($row->items, $firstItem?->name);
+        $planLabel = TransactionLabelResolver::customerPlanFamilyFromItems($row->items, $firstItem?->name);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         $domain = $row->items
@@ -999,7 +999,7 @@ class CustomerPortalController extends Controller
     {
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         $firstItem = $row->items->first();
-        $planLabel = TransactionLabelResolver::planLabel($row->items, $firstItem?->name ?? $row->transaction_no);
+        $planLabel = TransactionLabelResolver::customerPlanFamilyFromItems($row->items, $firstItem?->name ?? $row->transaction_no);
         $dueAt = $row->transacted_at?->copy()->addDays(30);
         $daysUntilDue = $dueAt
             ? now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false)
