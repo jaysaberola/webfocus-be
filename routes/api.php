@@ -55,6 +55,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/billing/delete', [CustomerPortalController::class, 'deleteInvoices']);
         Route::post('/billing/pay', [CustomerPortalController::class, 'payInvoice']);
         Route::post('/billing/add-funds', [CustomerPortalController::class, 'addFunds']);
+        Route::post('/billing/payment-proofs/scan', [CustomerPortalController::class, 'scanPaymentProof']);
         Route::post('/billing/payment-proofs', [CustomerPortalController::class, 'uploadPaymentProof']);
         Route::delete('/billing/payment-proofs/{paymentProof}', [CustomerPortalController::class, 'deletePaymentProof']);
         Route::get('/billing/proposals/{salesTransaction}', [CustomerPortalController::class, 'listProposals']);

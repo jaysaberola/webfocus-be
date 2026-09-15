@@ -33,4 +33,6 @@ return [
         'PAYNAMICS_FRONTEND_RETURN_URL',
         env('FRONTEND_URL', 'http://localhost:3000') . '/public/dashboard?tab=billing'
     ),
+
+    'tesseract_path' => env('TESSERACT_PATH', 'tesseract'),
 ];

@@ -19,6 +19,7 @@ use App\Support\WebDesignQuotation;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
+use App\Services\PaynamicsProofScanner;
 use App\Services\PaynamicsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -237,14 +238,14 @@ class CustomerPortalController extends Controller
         ]);
     }
 
-    public function uploadPaymentProof(Request $request)
+    public function scanPaymentProof(Request $request)
     {
         $customer = $this->resolveCustomer($request);
 
         $validated = $request->validate([
             'invoice_id' => ['required', 'string', 'max:120'],
-            'notes' => ['nullable', 'string', 'max:500'],
             'receipt' => ['required', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:5120'],
+            'scanned_text' => ['nullable', 'string', 'max:20000'],
         ]);
 
         $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
@@ -254,6 +255,41 @@ class CustomerPortalController extends Controller
             422,
             'This web design order is still Pending Quotation. Wait for Sales to request payment before uploading proof.'
         );
+
+        $scan = app(PaynamicsProofScanner::class)->scan(
+            $request->file('receipt'),
+            $transaction,
+            $validated['scanned_text'] ?? null
+        );
+
+        return response()->json(['data' => $scan]);
+    }
+
+    public function uploadPaymentProof(Request $request)
+    {
+        $customer = $this->resolveCustomer($request);
+
+        $validated = $request->validate([
+            'invoice_id' => ['required', 'string', 'max:120'],
+            'notes' => ['nullable', 'string', 'max:500'],
+            'receipt' => ['required', 'file', 'mimes:pdf,png,jpg,jpeg', 'max:5120'],
+            'scanned_text' => ['nullable', 'string', 'max:20000'],
+        ]);
+
+        $transaction = $this->resolveInvoiceTransaction($customer, $validated['invoice_id']);
+        $this->assertInvoicePayable($transaction);
+        abort_if(
+            WebDesignQuotation::isPendingQuotation($transaction),
+            422,
+            'This web design order is still Pending Quotation. Wait for Sales to request payment before uploading proof.'
+        );
+
+        $scan = app(PaynamicsProofScanner::class)->scan(
+            $request->file('receipt'),
+            $transaction,
+            $validated['scanned_text'] ?? null
+        );
+        abort_if(! $scan['valid'], 422, $scan['message']);
 
         $invoiceId = $this->invoiceId($transaction);
 

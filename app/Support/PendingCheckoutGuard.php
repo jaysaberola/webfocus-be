@@ -27,6 +27,7 @@ class PendingCheckoutGuard
             ->orderBy('id')
             ->get()
             ->reject(fn (SalesTransaction $row) => WebDesignQuotation::isPendingQuotation($row))
+            ->reject(fn (SalesTransaction $row) => $this->isPaymentDueOrOverdue($row))
             ->values();
     }
 
@@ -174,5 +175,17 @@ class PendingCheckoutGuard
             ->sort()
             ->values()
             ->all();
+    }
+
+    private function isPaymentDueOrOverdue(SalesTransaction $row): bool
+    {
+        $dueAt = $row->transacted_at?->copy()->addDays(30);
+        if (!$dueAt) {
+            return false;
+        }
+
+        $daysUntilDue = now()->startOfDay()->diffInDays($dueAt->copy()->startOfDay(), false);
+
+        return $daysUntilDue <= 7;
     }
 }
