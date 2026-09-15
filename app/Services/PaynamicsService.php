@@ -5,7 +5,9 @@ namespace App\Services;
 use App\Models\PaynamicsPaymentReference;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Support\RelatedPaymentSync;
 use Illuminate\Http\Client\Response;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -240,12 +242,13 @@ class PaynamicsService
 
                 if (!$keepExistingSpecific) {
                     $referenceUpdates['payment_method'] = $methodLabel;
-                    $this->writePaymentMethodToNotes($transaction, $methodLabel);
                 }
             }
 
+            $paidAt = null;
             if ($nextStatus === 'paid') {
-                $referenceUpdates['paid_at'] = $reference->paid_at ?? now();
+                $paidAt = $this->paidAtFromPayload($payload, $reference->paid_at);
+                $referenceUpdates['paid_at'] = $paidAt;
                 $referenceUpdates['failed_at'] = null;
 
                 $transaction->update([
@@ -267,6 +270,15 @@ class PaynamicsService
             }
 
             $reference->update($referenceUpdates);
+
+            $modeLabel = trim((string) ($referenceUpdates['payment_method'] ?? $reference->payment_method ?? $methodLabel ?? ''));
+            if ($nextStatus === 'paid') {
+                RelatedPaymentSync::apply(
+                    $transaction->fresh() ?? $transaction,
+                    $modeLabel !== '' ? $modeLabel : 'Paynamics',
+                    $paidAt ?? now()
+                );
+            }
 
             return $reference->fresh(['salesTransaction.items']);
         });
@@ -778,18 +790,34 @@ class PaynamicsService
         return '';
     }
 
-    private function writePaymentMethodToNotes(SalesTransaction $transaction, string $label): void
+    private function paidAtFromPayload(array $payload, mixed $existing): Carbon
     {
-        $line = 'Payment method: Paynamics ('.$label.')';
-        $notes = (string) $transaction->notes;
-        if (preg_match('/^Payment method:\s*.+$/mi', $notes)) {
-            $notes = preg_replace('/^Payment method:\s*.+$/mi', $line, $notes, 1);
-        } else {
-            $notes = trim($notes) === '' ? $line : $line."\n".$notes;
+        if ($existing) {
+            try {
+                return Carbon::parse($existing);
+            } catch (Throwable) {
+                // Fall through to payload / now.
+            }
         }
 
-        $transaction->notes = $notes;
-        $transaction->save();
+        foreach (['timestamp', 'payment_date', 'paymentdate', 'txn_time', 'txntime'] as $key) {
+            $raw = $this->payloadValue($payload, $key);
+            if ($raw === '') {
+                continue;
+            }
+
+            try {
+                if (preg_match('/^\d{14}$/', $raw)) {
+                    return Carbon::createFromFormat('YmdHis', $raw) ?: now();
+                }
+
+                return Carbon::parse($raw);
+            } catch (Throwable) {
+                continue;
+            }
+        }
+
+        return now();
     }
 
     private function paymentMethodFromTransactionNotes(SalesTransaction $transaction): ?string

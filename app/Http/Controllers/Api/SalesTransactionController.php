@@ -37,6 +37,7 @@ class SalesTransactionController extends Controller
             'clientOwner:id,fname,lname,email',
             'items',
             'proposals',
+            'paynamicsPaymentReferences',
         ];
     }
 

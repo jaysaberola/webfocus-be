@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -42,6 +43,8 @@ class SalesTransaction extends Model implements AuditableContract
     protected $appends = [
         'issued_date',
         'due_date',
+        'payment_date',
+        'payment_mode',
     ];
 
     public function getIssuedDateAttribute(): ?string
@@ -52,6 +55,16 @@ class SalesTransaction extends Model implements AuditableContract
     public function getDueDateAttribute(): ?string
     {
         return TransactionLabelResolver::dueDateFrom($this->transacted_at);
+    }
+
+    public function getPaymentDateAttribute(): ?string
+    {
+        return RelatedPaymentSync::dateFrom($this);
+    }
+
+    public function getPaymentModeAttribute(): ?string
+    {
+        return RelatedPaymentSync::modeFrom($this);
     }
 
     public function customer()

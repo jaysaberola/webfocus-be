@@ -13,6 +13,7 @@ use App\Models\SalesTransactionItem;
 use App\Models\SalesTransactionProposal;
 use App\Models\User;
 use App\Support\PendingCheckoutGuard;
+use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
 use App\Support\WebDesignQuotation;
@@ -198,7 +199,7 @@ class CustomerPortalController extends Controller
                 $query->whereNull('payment_status')
                     ->orWhereNotIn('payment_status', ['cancelled', 'canceled']);
             })
-            ->with(['items', 'proposals'])
+            ->with(['items', 'proposals', 'paynamicsPaymentReferences'])
             ->when($request->filled('date_from'), fn ($q) => $q->whereDate('transacted_at', '>=', $request->input('date_from')))
             ->when($request->filled('date_to'), fn ($q) => $q->whereDate('transacted_at', '<=', $request->input('date_to')))
             ->latest('created_at')
@@ -215,7 +216,7 @@ class CustomerPortalController extends Controller
                 $query->whereNull('payment_status')
                     ->orWhereNotIn('payment_status', ['cancelled', 'canceled']);
             })
-            ->with(['items', 'proposals'])
+            ->with(['items', 'proposals', 'paynamicsPaymentReferences'])
             ->latest('created_at')
             ->latest('id')
             ->get();
@@ -1047,6 +1048,8 @@ class CustomerPortalController extends Controller
             'status' => $status,
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
             'gateway' => $this->extractPaymentMethod($row),
+            'paymentDate' => RelatedPaymentSync::dateFrom($row),
+            'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
             'canCancel' => in_array($status, [
                 CustomerPortalProvisioner::STATUS_PENDING,
                 CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL,
@@ -1103,6 +1106,8 @@ class CustomerPortalController extends Controller
             'due' => optional($dueAt)->format('Y-m-d'),
             'amount' => WebDesignQuotation::displayAmount($row),
             'status' => $status,
+            'paymentDate' => RelatedPaymentSync::dateFrom($row),
+            'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
             'canPay' => $canPay,
             'daysUntilDue' => $daysUntilDue,
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
