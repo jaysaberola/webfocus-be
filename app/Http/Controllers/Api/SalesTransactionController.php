@@ -297,6 +297,66 @@ class SalesTransactionController extends Controller
         ], 201);
     }
 
+    public function continuePaynamicsCheckout(Request $request, PaynamicsService $paynamics)
+    {
+        /** @var User|null $customer */
+        $customer = $request->user();
+        abort_unless($customer, 401);
+        abort_unless(
+            $customer->hasRole('customer'),
+            403,
+            'Only client accounts can continue Paynamics checkout.'
+        );
+
+        $paynamics->assertCustomerProfile($customer);
+
+        $validated = $request->validate([
+            'invoice_id' => ['required', 'string', 'max:120'],
+        ]);
+
+        $transaction = $this->findPendingCheckoutInvoice($customer, $validated['invoice_id']);
+        abort_unless(
+            $transaction,
+            422,
+            'No pending Paynamics payment was found for this invoice.'
+        );
+
+        try {
+            $gateway = $paynamics->initiate(
+                $this->prepareReusableCheckout($transaction, (string) $transaction->notes),
+                $customer,
+                $request->ip(),
+                $request->userAgent()
+            );
+        } catch (Throwable $exception) {
+            report($exception);
+
+            $payload = [
+                'message' => 'Paynamics could not be opened for this pending invoice. Try again.',
+                'data' => [
+                    'invoice_id' => PendingCheckoutGuard::invoiceId($transaction),
+                    'transaction_no' => $transaction->transaction_no,
+                ],
+            ];
+
+            if (config('app.debug')) {
+                $payload['error'] = $exception->getMessage();
+            }
+
+            return response()->json($payload, 502);
+        }
+
+        return response()->json([
+            'message' => 'Continuing pending Paynamics payment for '.PendingCheckoutGuard::invoiceId($transaction).'.',
+            'reused' => true,
+            'data' => $transaction->fresh([
+                'customer:id,fname,lname,email',
+                'items',
+            ]),
+            'paynamics' => $gateway,
+        ]);
+    }
+
     public function show(SalesTransaction $salesTransaction)
     {
         return response()->json([
@@ -748,6 +808,22 @@ class SalesTransactionController extends Controller
         }
 
         return $header."\n".$current;
+    }
+
+    private function findPendingCheckoutInvoice(User $customer, string $invoiceId): ?SalesTransaction
+    {
+        $wanted = strtolower(trim($invoiceId));
+        $wantedNo = preg_replace('/^inv-/', '', $wanted) ?? $wanted;
+
+        return app(PendingCheckoutGuard::class)->unpaidCheckouts($customer)->first(function (SalesTransaction $row) use ($wanted, $wantedNo) {
+            $invoice = strtolower(PendingCheckoutGuard::invoiceId($row));
+            $transactionNo = strtolower(trim((string) $row->transaction_no));
+
+            return $invoice === $wanted
+                || $transactionNo === $wanted
+                || $transactionNo === $wantedNo
+                || $invoice === 'inv-'.$wantedNo;
+        });
     }
 
     private function prepareReusableCheckout(SalesTransaction $transaction, string $notes): SalesTransaction
