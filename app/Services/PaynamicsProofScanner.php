@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\PaynamicsPaymentReference;
 use App\Models\SalesTransaction;
 use App\Support\PaynamicsProofEvaluator;
 use App\Support\WebDesignQuotation;
@@ -25,8 +26,14 @@ class PaynamicsProofScanner
             ->filter()
             ->values()
             ->all();
+        $foreignRequestIds = PaynamicsPaymentReference::query()
+            ->where('sales_transaction_id', '!=', $transaction->id)
+            ->pluck('request_id')
+            ->filter()
+            ->values()
+            ->all();
 
-        return PaynamicsProofEvaluator::evaluate($text, $amount, $requestIds);
+        return PaynamicsProofEvaluator::evaluate($text, $amount, $requestIds, $foreignRequestIds);
     }
 
     private function extractText(UploadedFile $file): string

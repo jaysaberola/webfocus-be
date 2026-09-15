@@ -104,10 +104,71 @@ class PaynamicsProofEvaluatorTest extends TestCase
         Have concerns on payment?
         TXT;
 
-        $result = PaynamicsProofEvaluator::evaluate($text, 23400.00);
+        $result = PaynamicsProofEvaluator::evaluate($text, 23400.00, ['WF260915105840VHPNDTW3']);
 
         $this->assertTrue($result['valid']);
         $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
         $this->assertTrue($result['has_brand']);
+        $this->assertSame('WF260915105840VHPNDTW3', $result['matched_request_id']);
+    }
+
+    public function test_rejects_success_receipt_for_a_different_invoice(): void
+    {
+        $text = <<<TXT
+        Payment Success
+        WEBFOCUS SOLUTIONS, INC
+        Amount PHP 23,400.00
+        Request ID WF260915105840VHPNDTW3
+        Payment Method Credit Card
+        Go back to merchant
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            23400.00,
+            ['WF260915120000OTHERINV'],
+            ['WF260915105840VHPNDTW3']
+        );
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_WRONG_INVOICE, $result['code']);
+    }
+
+    public function test_rejects_when_invoice_request_id_is_missing_from_receipt(): void
+    {
+        $text = <<<TXT
+        Payment Success
+        WEBFOCUS SOLUTIONS, INC
+        Amount PHP 23,400.00
+        Payment Method Credit Card
+        Go back to merchant
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate($text, 23400.00, ['WF260915105840VHPNDTW3']);
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_REQUEST_ID_MISMATCH, $result['code']);
+    }
+
+    public function test_rejects_receipt_request_id_that_belongs_to_another_payment(): void
+    {
+        $text = <<<TXT
+        Payment Success
+        WEBFOCUS SOLUTIONS, INC
+        Amount PHP 23,400.00
+        Request ID WF260915105840VHPNDTW3
+        Payment Method Credit Card
+        Go back to merchant
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            23400.00,
+            [],
+            ['WF260915105840VHPNDTW3']
+        );
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_WRONG_INVOICE, $result['code']);
     }
 }
