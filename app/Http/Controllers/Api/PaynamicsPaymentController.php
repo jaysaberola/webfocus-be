@@ -27,6 +27,10 @@ class PaynamicsPaymentController extends Controller
         Log::info('PAYNAMICS NOTIFICATION RECEIVED', [
             'request_id' => $payload['request_id'] ?? $request->input('request_id'),
             'response_code' => $payload['response_code'] ?? $request->input('response_code'),
+            'ptype' => $payload['ptype'] ?? $payload['p_type'] ?? null,
+            'pmethod' => $payload['pmethod'] ?? null,
+            'pchannel' => $payload['pchannel'] ?? null,
+            'payload_keys' => array_keys($payload),
             'has_signature' => !empty($payload['signature']),
         ]);
 
@@ -81,6 +85,10 @@ class PaynamicsPaymentController extends Controller
         Log::info('PAYNAMICS BROWSER RETURN RECEIVED', [
             'request_id' => $requestId,
             'response_code' => $responseCode,
+            'ptype' => $payload['ptype'] ?? $payload['p_type'] ?? null,
+            'pmethod' => $payload['pmethod'] ?? null,
+            'pchannel' => $payload['pchannel'] ?? null,
+            'payload_keys' => array_keys($payload),
             'has_signature' => !empty($payload['signature']),
         ]);
 

@@ -46,6 +46,7 @@ class PaynamicsService
             'sales_transaction_id' => $transaction->id,
             'request_id' => $requestId,
             'status' => 'initiating',
+            'payment_method' => $this->paymentMethodFromTransactionNotes($transaction),
         ]);
 
         $payload = $this->buildRequestPayload(
@@ -229,6 +230,19 @@ class PaynamicsService
                 'response_code' => $responseCode ?: $reference->response_code,
                 'status' => $nextStatus,
             ];
+
+            $methodLabel = $this->paymentMethodLabelFromPayload($payload);
+            if ($methodLabel) {
+                $existing = trim((string) $reference->payment_method);
+                $keepExistingSpecific = $existing !== ''
+                    && !self::isCategoryPaymentLabel($existing)
+                    && self::isCategoryPaymentLabel($methodLabel);
+
+                if (!$keepExistingSpecific) {
+                    $referenceUpdates['payment_method'] = $methodLabel;
+                    $this->writePaymentMethodToNotes($transaction, $methodLabel);
+                }
+            }
 
             if ($nextStatus === 'paid') {
                 $referenceUpdates['paid_at'] = $reference->paid_at ?? now();
@@ -562,6 +576,245 @@ class PaynamicsService
         }
 
         return 'failed';
+    }
+
+    private function paymentMethodLabelFromPayload(array $payload): ?string
+    {
+        $keys = [
+            'pchannel',
+            'p_channel',
+            'payment_channel',
+            'paymentchannel',
+            'pmt_channel',
+            'pmethod',
+            'p_method',
+            'payment_method',
+            'paymentmethod',
+            'pmt_method',
+            'ptype',
+            'p_type',
+            'payment_type',
+            'paymenttype',
+            'channel',
+        ];
+
+        $labels = [];
+        foreach ($keys as $key) {
+            $raw = $this->payloadValue($payload, $key);
+            if ($raw === '') {
+                continue;
+            }
+            $label = self::labelForPaymentChannel($raw);
+            if ($label !== '') {
+                $labels[] = $label;
+            }
+        }
+
+        if ($labels === []) {
+            return null;
+        }
+
+        $specific = array_values(array_filter(
+            $labels,
+            fn (string $label) => !self::isCategoryPaymentLabel($label)
+        ));
+
+        return $specific[0] ?? $labels[0];
+    }
+
+    public static function isCategoryPaymentLabel(string $label): bool
+    {
+        return in_array($label, [
+            'Credit / Debit Card',
+            'Installment (Non-Credit Card)',
+            'E-Wallet',
+            'Online Bank Transfer',
+            'Online Bills Payment',
+        ], true);
+    }
+
+    public static function labelForPaymentChannel(string $raw): string
+    {
+        $pretty = trim($raw);
+        if ($pretty === '') {
+            return '';
+        }
+
+        if (preg_match('/^[0-9a-f]{16,}$/i', $pretty) || preg_match('/^\d{8,}$/', $pretty)) {
+            return '';
+        }
+
+        $needle = strtolower(str_replace(['_', '-', ' '], '', $pretty));
+        if ($needle === '' || $needle === 'paynamics' || str_contains($needle, 'ipg') || str_contains($needle, 'hosted')) {
+            return '';
+        }
+
+        $map = [
+            'cc' => 'Credit / Debit Card',
+            'creditcard' => 'Credit / Debit Card',
+            'creditdebitcard' => 'Credit / Debit Card',
+            'visa' => 'Credit / Debit Card',
+            'mastercard' => 'Credit / Debit Card',
+            'installment' => 'Installment (Non-Credit Card)',
+            'billease' => 'Billease',
+            'billeas' => 'Billease',
+            'bdoinstall' => 'Installment (Non-Credit Card)',
+            'bpiinstall' => 'Installment (Non-Credit Card)',
+            'hsbcinstall' => 'Installment (Non-Credit Card)',
+            'wallet' => 'E-Wallet',
+            'ewallet' => 'E-Wallet',
+            'gc' => 'GCash',
+            'gcash' => 'GCash',
+            'maya' => 'Maya',
+            'paymaya' => 'Maya',
+            'pwallet' => 'Maya',
+            'coins' => 'coins.ph',
+            'coinsph' => 'coins.ph',
+            'coinsphwallet' => 'coins.ph',
+            'grabpay' => 'GrabPay',
+            'gry' => 'GrabPay',
+            'bn' => 'Online Bank Transfer',
+            'bancnet' => 'Online Bank Transfer',
+            'onlinebanktransfer' => 'Online Bank Transfer',
+            'bpi' => 'BPI',
+            'bpionline' => 'BPI',
+            'bdo' => 'BDO',
+            'bdoobp' => 'BDO',
+            'brankasbdo' => 'BDO',
+            'qrph' => 'QRPh',
+            'qrphl' => 'QRPh',
+            'instapay' => 'QRPh',
+            'unionbank' => 'UnionBank',
+            'ubp' => 'UnionBank',
+            'ubpobp' => 'UnionBank',
+            'landbank' => 'Landbank',
+            'lbl' => 'Landbank',
+            'brankaslandbank' => 'Landbank',
+            'ecpay' => 'Online Bills Payment',
+            'onlinebillspayment' => 'Online Bills Payment',
+            'onlinebillspyament' => 'Online Bills Payment',
+            'bankotc' => 'Online Bills Payment',
+            'nonbankotc' => 'Online Bills Payment',
+            'robinsons' => 'Robinsons Bank',
+            'robinsonsbank' => 'Robinsons Bank',
+            'rbank' => 'Robinsons Bank',
+        ];
+
+        if (isset($map[$needle])) {
+            return $map[$needle];
+        }
+
+        if (preg_match('/billease|billeas/', $needle)) {
+            return 'Billease';
+        }
+        if (preg_match('/install|instl|noncredit/', $needle)) {
+            return 'Installment (Non-Credit Card)';
+        }
+        if (preg_match('/gcash|^gc$/', $needle)) {
+            return 'GCash';
+        }
+        if (preg_match('/paymaya|maya/', $needle)) {
+            return 'Maya';
+        }
+        if (preg_match('/grabpay|^gry$/', $needle)) {
+            return 'GrabPay';
+        }
+        if (preg_match('/coins/', $needle)) {
+            return 'coins.ph';
+        }
+        if (preg_match('/ewallet|pwallet|wallet|shopee|alipay/', $needle)) {
+            return 'E-Wallet';
+        }
+        if (preg_match('/^bpi|bpionline/', $needle)) {
+            return 'BPI';
+        }
+        if (preg_match('/brankasbdo|^bdo$|bdoobp/', $needle)) {
+            return 'BDO';
+        }
+        if (preg_match('/qrph|instapay/', $needle)) {
+            return 'QRPh';
+        }
+        if (preg_match('/unionbank|^ubp|ubpobp/', $needle)) {
+            return 'UnionBank';
+        }
+        if (preg_match('/landbank|brankaslandbank|^lbl$/', $needle)) {
+            return 'Landbank';
+        }
+        if (preg_match('/robinson|^rbank$/', $needle)) {
+            return 'Robinsons Bank';
+        }
+        if (preg_match('/bancnet|onlinebank|banktransfer|^bn$|onlinebanking/', $needle)) {
+            return 'Online Bank Transfer';
+        }
+        if (preg_match('/ecpay|bills|otc|overthecounter|711|7eleven|cebuana|mlhuillier|palawan|dragonpay/', $needle)) {
+            return 'Online Bills Payment';
+        }
+        if (preg_match('/^cc$|credit|debit|visa|master|^card$/', $needle)) {
+            return 'Credit / Debit Card';
+        }
+
+        return $pretty;
+    }
+
+    private function payloadValue(array $payload, string $key): string
+    {
+        $want = strtolower($key);
+
+        foreach ($payload as $name => $value) {
+            if (strtolower((string) $name) === $want) {
+                if (is_scalar($value)) {
+                    return trim((string) $value);
+                }
+            }
+
+            if (is_array($value)) {
+                $nested = $this->payloadValue($value, $key);
+                if ($nested !== '') {
+                    return $nested;
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function writePaymentMethodToNotes(SalesTransaction $transaction, string $label): void
+    {
+        $line = 'Payment method: Paynamics ('.$label.')';
+        $notes = (string) $transaction->notes;
+        if (preg_match('/^Payment method:\s*.+$/mi', $notes)) {
+            $notes = preg_replace('/^Payment method:\s*.+$/mi', $line, $notes, 1);
+        } else {
+            $notes = trim($notes) === '' ? $line : $line."\n".$notes;
+        }
+
+        $transaction->notes = $notes;
+        $transaction->save();
+    }
+
+    private function paymentMethodFromTransactionNotes(SalesTransaction $transaction): ?string
+    {
+        if (!preg_match('/Payment method:\s*([^\n]+)/i', (string) $transaction->notes, $matches)) {
+            return null;
+        }
+
+        $line = trim($matches[1]);
+        if (preg_match('/\(([^)]+)\)\s*$/', $line, $labelMatch)) {
+            $label = self::labelForPaymentChannel(trim($labelMatch[1]));
+            if ($label !== '') {
+                return $label;
+            }
+            $fallback = trim($labelMatch[1]);
+            return $fallback !== '' && strcasecmp($fallback, 'Paynamics') !== 0 ? $fallback : null;
+        }
+
+        if (preg_match('/Paynamics-(\w+)/i', $line, $idMatch)) {
+            $label = self::labelForPaymentChannel($idMatch[1]);
+            return $label !== '' ? $label : null;
+        }
+
+        $label = self::labelForPaymentChannel($line);
+        return $label !== '' ? $label : null;
     }
 
     private function redirectUrl(array $body): ?string

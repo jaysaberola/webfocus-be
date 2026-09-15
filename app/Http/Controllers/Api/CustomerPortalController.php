@@ -18,6 +18,7 @@ use App\Support\WebDesignQuotation;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
+use App\Services\PaynamicsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -103,7 +104,7 @@ class CustomerPortalController extends Controller
 
         $orders = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with('items')
+            ->with(['items', 'paynamicsPaymentReferences'])
             ->latest('created_at')
             ->latest('id')
             ->get()
@@ -175,7 +176,7 @@ class CustomerPortalController extends Controller
 
         return response()->json([
             'message' => 'Order cancelled.',
-            'data' => $this->mapOrder($salesTransaction->fresh('items')),
+            'data' => $this->mapOrder($salesTransaction->fresh(['items', 'paynamicsPaymentReferences'])),
         ]);
     }
 
@@ -986,7 +987,7 @@ class CustomerPortalController extends Controller
             'total' => WebDesignQuotation::displayAmount($row),
             'status' => $status,
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
-            'gateway' => $this->extractPaymentMethod($row->notes),
+            'gateway' => $this->extractPaymentMethod($row),
             'canCancel' => in_array($status, [
                 CustomerPortalProvisioner::STATUS_PENDING,
                 CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL,
@@ -1139,7 +1140,42 @@ class CustomerPortalController extends Controller
             || str_starts_with($notes, 'Account credit top-up');
     }
 
-    private function extractPaymentMethod(?string $notes): string
+    private function extractPaymentMethod(SalesTransaction $row): string
+    {
+        $fromReference = $this->paymentMethodFromReference($row);
+        if ($fromReference) {
+            return $fromReference;
+        }
+
+        return $this->paymentMethodFromNotes($row->notes);
+    }
+
+    private function paymentMethodFromReference(SalesTransaction $row): ?string
+    {
+        $references = $row->relationLoaded('paynamicsPaymentReferences')
+            ? $row->paynamicsPaymentReferences
+            : $row->paynamicsPaymentReferences()->get();
+
+        $stored = $references
+            ->sortByDesc('id')
+            ->first(fn ($reference) => filled($reference->payment_method))
+            ?->payment_method;
+
+        if (!is_string($stored) || trim($stored) === '') {
+            return null;
+        }
+
+        $label = PaynamicsService::labelForPaymentChannel($stored) ?: trim($stored);
+        if ($label === '' || strcasecmp($label, 'Paynamics') === 0) {
+            return null;
+        }
+
+        return str_starts_with(strtolower($label), 'paynamics')
+            ? $label
+            : 'Paynamics - '.$label;
+    }
+
+    private function paymentMethodFromNotes(?string $notes): string
     {
         $trimmed = trim((string) $notes);
         if ($trimmed === '') {
@@ -1160,7 +1196,7 @@ class CustomerPortalController extends Controller
             }
 
             if (stripos($line, 'paynamics') !== false) {
-                if ($label && !str_contains(strtolower($label), 'ipg')) {
+                if ($label && !str_contains(strtolower($label), 'ipg') && strcasecmp($label, 'Paynamics') !== 0) {
                     return 'Paynamics - '.$label;
                 }
 
@@ -1192,12 +1228,27 @@ class CustomerPortalController extends Controller
 
     private function formatPaymentMethodLabel(string $methodId): string
     {
+        $mapped = PaynamicsService::labelForPaymentChannel($methodId);
+        if ($mapped !== '') {
+            return $mapped;
+        }
+
         return match (strtolower($methodId)) {
             'cc' => 'Credit / Debit Card',
-            'gc' => 'GCash',
-            'ewallet' => 'E-Wallet',
+            'gc', 'ewallet' => 'E-Wallet',
+            'gcash' => 'GCash',
+            'maya', 'paymaya' => 'Maya',
+            'coinsph' => 'coins.ph',
+            'grabpay' => 'GrabPay',
+            'billease' => 'Billease',
             'bn' => 'Online Bank Transfer',
+            'bpi' => 'BPI',
+            'bdo' => 'BDO',
+            'qrph' => 'QRPh',
+            'unionbank' => 'UnionBank',
+            'landbank' => 'Landbank',
             'ecpay' => 'Online Bills Payment',
+            'robinsonsbank' => 'Robinsons Bank',
             'installment' => 'Installment (Non-Credit Card)',
             default => ucwords(str_replace(['-', '_'], ' ', $methodId)),
         };

@@ -11,6 +11,7 @@ class PaynamicsPaymentReference extends Model
         'request_id',
         'response_id',
         'response_code',
+        'payment_method',
         'status',
         'paid_at',
         'failed_at',
