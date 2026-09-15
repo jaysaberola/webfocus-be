@@ -1029,6 +1029,12 @@ class CustomerPortalController extends Controller
         $planLabel = TransactionLabelResolver::customerPlanFamilyFromItems($row->items, $firstItem?->name);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
+        $canCheckout = $status === CustomerPortalProvisioner::STATUS_PENDING
+            && (float) $row->grand_total > 0
+            && ! WebDesignQuotation::isPendingQuotation($row);
+        if ($canCheckout) {
+            $status = 'Pending Payment';
+        }
         $domain = $row->items
             ->pluck('name')
             ->first(fn ($name) => TransactionLabelResolver::looksLikeDomain($name));
@@ -1050,8 +1056,10 @@ class CustomerPortalController extends Controller
             'gateway' => $this->extractPaymentMethod($row),
             'paymentDate' => RelatedPaymentSync::dateFrom($row),
             'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
+            'canCheckout' => $canCheckout,
             'canCancel' => in_array($status, [
                 CustomerPortalProvisioner::STATUS_PENDING,
+                'Pending Payment',
                 CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL,
             ], true),
             'items' => $items,
