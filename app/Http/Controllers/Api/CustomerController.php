@@ -85,9 +85,11 @@ class CustomerController extends Controller
 
                 return [
                     'id' => $customer->id,
-                    'name' => $customer->mname ?: null,
+                    'name' => $customer->mname ?: ($customer->full_name ?: $customer->email),
                     'representative' => $customer->full_name,
                     'company' => $customer->mname,
+                    'fname' => $customer->fname,
+                    'lname' => User::isPlaceholderLastName($customer->lname) ? '' : $customer->lname,
                     'email' => $customer->email,
                     'type' => 'Customer',
                     'role' => $customer->getRoleNames()->first(),
