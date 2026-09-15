@@ -185,6 +185,7 @@ class CustomerPortalController extends Controller
     public function billing(Request $request)
     {
         $customer = $this->resolveCustomer($request);
+        app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
         app(PendingCheckoutGuard::class)->collapseAllDuplicates($customer);
 
         $transactions = SalesTransaction::query()

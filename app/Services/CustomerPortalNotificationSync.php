@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\CustomerNotification;
+use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
 use App\Models\SalesTransaction;
 use Illuminate\Support\Collection;
@@ -60,10 +61,26 @@ class CustomerPortalNotificationSync
             ]);
         }
 
+        foreach ($this->paidTransactionsNeedingProof($transactions, $customerId) as $transaction) {
+            $invoiceId = 'INV-' . $transaction->transaction_no;
+            $key = 'paynamics-proof:' . $transaction->id;
+            $activeKeys[] = $key;
+            $this->upsert($customerId, $key, [
+                'title' => 'Submit your Paynamics receipt',
+                'body' => "Your payment for {$invoiceId} went through. Screenshot or download the Paynamics Payment Success page, then upload it in Billing so we can confirm your receipt.",
+                'type' => 'billing',
+                'action_url' => '/public/dashboard?tab=billing&submit_proof=1',
+            ]);
+        }
+
         CustomerNotification::query()
             ->where('customer_id', $customerId)
-            ->whereNotNull('reference_key')
-            ->whereNotIn('reference_key', $activeKeys)
+            ->where(function ($query) {
+                $query->where('reference_key', 'like', 'provisioning:%')
+                    ->orWhere('reference_key', 'like', 'payment:%')
+                    ->orWhere('reference_key', 'like', 'paynamics-proof:%');
+            })
+            ->whereNotIn('reference_key', $activeKeys ?: ['__none__'])
             ->delete();
     }
 
@@ -113,6 +130,24 @@ class CustomerPortalNotificationSync
             ];
         }
 
+        $proofNeeded = $this->paidTransactionsNeedingProof($transactions, (int) ($services->first()?->customer_id ?? $transactions->first()?->customer_id ?? 0));
+        if ($proofNeeded->isNotEmpty()) {
+            $first = $proofNeeded->first();
+            $invoiceId = 'INV-' . $first->transaction_no;
+            $count = $proofNeeded->count();
+            $alerts[] = [
+                'id' => 'alert-paynamics-proof',
+                'tone' => 'billing',
+                'title' => 'Submit your Paynamics receipt',
+                'message' => $count === 1
+                    ? "Screenshot or download the Paynamics Payment Success page for {$invoiceId}, then upload it in Billing."
+                    : "You have {$count} paid invoices waiting for a Paynamics Payment Success screenshot.",
+                'actionLabel' => 'Upload Receipt',
+                'actionHref' => '/public/dashboard?tab=billing&submit_proof=1',
+                'icon' => 'card',
+            ];
+        }
+
         return $alerts;
     }
 
@@ -150,6 +185,45 @@ class CustomerPortalNotificationSync
         return $transactions->filter(
             fn (SalesTransaction $row) => CustomerPortalProvisioner::isUnpaid($row)
         );
+    }
+
+    /**
+     * @param  Collection<int, SalesTransaction>  $transactions
+     * @return Collection<int, SalesTransaction>
+     */
+    private function paidTransactionsNeedingProof(Collection $transactions, int $customerId): Collection
+    {
+        if ($customerId < 1) {
+            return collect();
+        }
+
+        $paid = $transactions->filter(function (SalesTransaction $row) {
+            return in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
+        });
+
+        if ($paid->isEmpty()) {
+            return collect();
+        }
+
+        $invoiceIds = $paid->map(fn (SalesTransaction $row) => 'INV-' . $row->transaction_no)->all();
+        $covered = CustomerPaymentProof::query()
+            ->where('customer_id', $customerId)
+            ->where(function ($query) use ($paid, $invoiceIds) {
+                $query->whereIn('sales_transaction_id', $paid->pluck('id')->all())
+                    ->orWhereIn('invoice_id', $invoiceIds);
+            })
+            ->get();
+
+        return $paid
+            ->reject(function (SalesTransaction $row) use ($covered) {
+                $invoiceId = 'INV-' . $row->transaction_no;
+
+                return $covered->contains(function (CustomerPaymentProof $proof) use ($row, $invoiceId) {
+                    return (int) $proof->sales_transaction_id === (int) $row->id
+                        || $proof->invoice_id === $invoiceId;
+                });
+            })
+            ->values();
     }
 
     private function upsert(int $customerId, string $referenceKey, array $payload): void
