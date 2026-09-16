@@ -528,20 +528,59 @@ class CustomerPortalController extends Controller
         $rows = CustomerNotification::query()
             ->where('customer_id', $customer->id)
             ->latest()
-            ->get()
-            ->map(fn (CustomerNotification $row) => [
-                'id' => $row->id,
-                'title' => $row->title,
-                'desc' => $row->body,
-                'date' => optional($row->created_at)->format('Y-m-d'),
-                'createdAt' => optional($row->created_at)?->toIso8601String(),
-                'unread' => $row->read_at === null,
-                'type' => $row->type,
-                'actionUrl' => $row->action_url,
-            ])
+            ->get();
+
+        $serviceIds = [];
+        $transactionIds = [];
+        foreach ($rows as $row) {
+            $key = (string) $row->reference_key;
+            if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
+                $serviceIds[] = (int) $match[1];
+            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:)(\d+)$/', $key, $match)) {
+                $transactionIds[] = (int) $match[1];
+            }
+        }
+
+        $services = $serviceIds === []
+            ? collect()
+            : CustomerService::query()
+                ->where('customer_id', $customer->id)
+                ->whereIn('id', $serviceIds)
+                ->get()
+                ->keyBy('id');
+        $transactions = $transactionIds === []
+            ? collect()
+            : SalesTransaction::query()
+                ->with('items')
+                ->where('customer_id', $customer->id)
+                ->whereIn('id', $transactionIds)
+                ->get()
+                ->keyBy('id');
+        $proofs = CustomerPaymentProof::query()
+            ->where('customer_id', $customer->id)
+            ->latest()
+            ->get();
+        $profileChanges = CustomerProfileChangeRequest::query()
+            ->where('customer_id', $customer->id)
+            ->latest()
+            ->get();
+        $tickets = CustomerSupportTicket::query()
+            ->where('customer_id', $customer->id)
+            ->latest()
+            ->get();
+
+        $mapped = $rows
+            ->map(fn (CustomerNotification $row) => $this->mapCustomerInboxNotification(
+                $row,
+                $services,
+                $transactions,
+                $proofs,
+                $profileChanges,
+                $tickets,
+            ))
             ->values();
 
-        return response()->json(['data' => $rows]);
+        return response()->json(['data' => $mapped]);
     }
 
     public function unreadNotificationCount(Request $request)
@@ -1131,6 +1170,191 @@ class CustomerPortalController extends Controller
             'actionsDisabled' => $pendingQuotation && ! $proposalSubmitted,
             'recordId' => $row->id,
             'canDelete' => $this->invoiceDeleteBlockReason($row) === null,
+        ];
+    }
+
+    private function portalInboxDetails(array $pairs): array
+    {
+        $rows = [];
+        foreach ($pairs as $label => $value) {
+            $text = trim((string) $value);
+            if ($text === '' || $text === '—') {
+                continue;
+            }
+            $rows[] = [
+                'label' => $label,
+                'value' => $text,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function portalInboxActionLabel(?string $actionUrl, ?string $type): string
+    {
+        $url = (string) $actionUrl;
+        if (str_contains($url, 'tab=billing')) {
+            return 'Open Billing';
+        }
+        if (str_contains($url, 'tab=orders')) {
+            return 'Open Orders';
+        }
+        if (str_contains($url, 'tab=account')) {
+            return 'Open Account';
+        }
+        if (str_contains($url, 'tab=help')) {
+            return 'Open Help & Communication';
+        }
+        if (str_contains($url, 'tab=overview')) {
+            return 'Open Overview';
+        }
+        if (str_contains($url, 'tab=contract')) {
+            return 'Open Contract';
+        }
+
+        return match ($type) {
+            'billing' => 'Open Billing',
+            'order', 'payment' => 'Open Orders',
+            'support' => 'Open Help & Communication',
+            'account' => 'Open Account',
+            default => 'Open related page',
+        };
+    }
+
+    private function mapCustomerInboxNotification(
+        CustomerNotification $row,
+        $services,
+        $transactions,
+        $proofs,
+        $profileChanges,
+        $tickets,
+    ): array {
+        $key = (string) $row->reference_key;
+        $type = (string) ($row->type ?: 'general');
+        $intro = (string) $row->body;
+        $details = [];
+        $attachments = [];
+
+        if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
+            $service = $services->get((int) $match[1]);
+            if ($service) {
+                $details = $this->portalInboxDetails([
+                    'Service' => $service->title,
+                    'Plan' => $service->plan,
+                    'Category' => $service->category,
+                    'Status' => $service->status,
+                    'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+                ]);
+            }
+        } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:)(\d+)$/', $key, $match)) {
+            $transaction = $transactions->get((int) $match[1]);
+            if ($transaction) {
+                $itemNames = $transaction->items
+                    ? $transaction->items->pluck('name')->filter()->take(4)->implode(', ')
+                    : '';
+                $invoiceId = 'INV-' . $transaction->transaction_no;
+                $details = $this->portalInboxDetails([
+                    'Order No' => $transaction->transaction_no,
+                    'Invoice' => $invoiceId,
+                    'Items' => $itemNames,
+                    'Amount' => '₱' . number_format((float) $transaction->grand_total, 2),
+                    'Payment Status' => $transaction->payment_status,
+                    'Order Status' => $transaction->order_status,
+                    'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+                ]);
+                $proof = $proofs->first(function (CustomerPaymentProof $item) use ($transaction, $invoiceId) {
+                    return (int) $item->sales_transaction_id === (int) $transaction->id
+                        || $item->invoice_id === $invoiceId;
+                });
+                if ($proof && $proof->file_path) {
+                    $attachments[] = [
+                        'name' => $proof->file_name ?: basename((string) $proof->file_path),
+                        'url' => StorageUrl::publicAsset($proof->file_path),
+                    ];
+                    $details = array_merge($details, $this->portalInboxDetails([
+                        'Proof No' => $proof->proof_no,
+                        'Proof Status' => $proof->status,
+                    ]));
+                }
+            }
+        }
+
+        if ($attachments === [] && preg_match('/INV-[A-Z0-9-]+/i', (string) $row->body, $match)) {
+            $proof = $proofs->firstWhere('invoice_id', $match[0]);
+            if ($proof && $proof->file_path) {
+                $attachments[] = [
+                    'name' => $proof->file_name ?: basename((string) $proof->file_path),
+                    'url' => StorageUrl::publicAsset($proof->file_path),
+                ];
+                if ($details === []) {
+                    $details = $this->portalInboxDetails([
+                        'Invoice' => $proof->invoice_id,
+                        'Proof No' => $proof->proof_no,
+                        'Proof Status' => $proof->status,
+                        'Submitted' => optional($proof->created_at)->format('M j, Y g:i A'),
+                        'Notes' => $proof->notes,
+                    ]);
+                }
+            }
+        }
+
+        if ($type === 'account' && preg_match('/APR-\d+-\d+/', (string) $row->body, $match)) {
+            $change = $profileChanges->firstWhere('request_no', $match[0]);
+            if ($change) {
+                $details = $this->portalInboxDetails([
+                    'Request No' => $change->request_no,
+                    'Status' => $change->status,
+                    'Summary' => $change->summary,
+                    'Submitted' => optional($change->created_at)->format('M j, Y g:i A'),
+                ]);
+                $avatarPath = $change->requested_payload['avatar_path'] ?? null;
+                $url = StorageUrl::publicAsset($avatarPath);
+                if ($url) {
+                    $attachments[] = [
+                        'name' => basename((string) $avatarPath),
+                        'url' => $url,
+                    ];
+                }
+            }
+        }
+
+        if ($type === 'support' && preg_match('/Ticket\s+(\S+)/i', (string) $row->body, $match)) {
+            $ticket = $tickets->firstWhere('ticket_no', rtrim($match[1], '.'));
+            if ($ticket) {
+                $details = $this->portalInboxDetails([
+                    'Ticket No' => $ticket->ticket_no,
+                    'Subject' => $ticket->subject,
+                    'Status' => $ticket->status,
+                    'Submitted' => optional($ticket->created_at)->format('M j, Y g:i A'),
+                    'Message' => $ticket->message,
+                ]);
+            }
+        }
+
+        if ($details === []) {
+            $details = $this->portalInboxDetails([
+                'Category' => $type,
+                'Status' => $row->read_at ? 'Read' : 'Unread',
+                'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+                'Details' => $row->body,
+            ]);
+        }
+
+        return [
+            'id' => $row->id,
+            'title' => $row->title,
+            'desc' => $row->body,
+            'intro' => $intro,
+            'date' => optional($row->created_at)->format('Y-m-d'),
+            'createdAt' => optional($row->created_at)?->toIso8601String(),
+            'unread' => $row->read_at === null,
+            'type' => $type,
+            'actionUrl' => $row->action_url,
+            'actionLabel' => $this->portalInboxActionLabel($row->action_url, $type),
+            'fromName' => 'WebFocus',
+            'fromEmail' => null,
+            'attachments' => array_values(array_filter($attachments)),
+            'details' => $details,
         ];
     }
 
