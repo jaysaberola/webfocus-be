@@ -870,7 +870,7 @@ class CustomerPortalController extends Controller
                 $count === 1 ? 'Customer Deleted an Invoice' : 'Customer Deleted Invoices',
                 "{$clientLabel} deleted " . implode(', ', $deleted) . '.',
                 'billing',
-                '/public/commerce-admin?tab=invoices',
+                '/public/commerce-admin?tab=billing',
             );
 
             app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);

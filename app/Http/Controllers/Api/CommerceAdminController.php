@@ -645,7 +645,7 @@ class CommerceAdminController extends Controller
         }
 
         // Staff inbox copies for this signed-in user (quotations, proofs, tickets, profile changes).
-        $inboxAlerts = CustomerNotification::query()
+        $inboxRows = CustomerNotification::query()
             ->where('customer_id', $staff->id)
             ->where(function ($query) {
                 $query->where('reference_key', 'like', 'admin:%')
@@ -658,46 +658,46 @@ class CommerceAdminController extends Controller
             })
             ->latest()
             ->limit($perPage)
-            ->get()
-            ->map(function (CustomerNotification $row) {
-                $kind = match (true) {
-                    str_starts_with((string) $row->reference_key, 'admin:payment-proof:') => 'payment_proof',
-                    str_starts_with((string) $row->reference_key, 'admin:profile-change:') => 'profile_change',
-                    str_starts_with((string) $row->reference_key, 'admin:support-ticket:') => 'support_ticket',
-                    str_starts_with((string) $row->reference_key, 'admin:webdesign-quotation:') => 'web_design_quotation',
-                    default => (string) ($row->type ?: 'general'),
-                };
+            ->get();
 
-                $status = match ($kind) {
-                    'payment_proof' => 'Pending Review',
-                    'profile_change' => 'Pending Review',
-                    'support_ticket' => 'Open',
-                    'web_design_quotation' => 'Needs Pricing',
-                    default => 'Unread',
-                };
+        $proofIds = [];
+        $profileIds = [];
+        $ticketIds = [];
+        foreach ($inboxRows as $row) {
+            $key = (string) $row->reference_key;
+            if (preg_match('/^admin:payment-proof:(\d+)$/', $key, $m)) {
+                $proofIds[] = (int) $m[1];
+            } elseif (preg_match('/^admin:profile-change:(\d+)$/', $key, $m)) {
+                $profileIds[] = (int) $m[1];
+            } elseif (preg_match('/^admin:support-ticket:(\d+)$/', $key, $m)) {
+                $ticketIds[] = (int) $m[1];
+            }
+        }
 
-                $actionUrl = $row->action_url ?: match ($kind) {
-                    'payment_proof', 'profile_change' => '/public/commerce-admin?tab=approvals',
-                    'support_ticket' => '/public/commerce-admin?tab=helpdesk',
-                    default => '/public/commerce-admin?tab=orders',
-                };
+        $proofs = $proofIds === []
+            ? collect()
+            : CustomerPaymentProof::query()
+                ->with('customer:id,fname,lname,email,mname')
+                ->whereIn('id', $proofIds)
+                ->get()
+                ->keyBy('id');
+        $profiles = $profileIds === []
+            ? collect()
+            : CustomerProfileChangeRequest::query()
+                ->with('customer:id,fname,lname,email,mname,avatar')
+                ->whereIn('id', $profileIds)
+                ->get()
+                ->keyBy('id');
+        $tickets = $ticketIds === []
+            ? collect()
+            : CustomerSupportTicket::query()
+                ->with('customer:id,fname,lname,email,mname')
+                ->whereIn('id', $ticketIds)
+                ->get()
+                ->keyBy('id');
 
-                return [
-                    'id' => (int) $row->id,
-                    'kind' => $kind,
-                    'title' => $row->title,
-                    'desc' => $row->body,
-                    'date' => $this->formatAppDateTime($row->created_at),
-                    'audience' => 'Assigned / Role Inbox',
-                    'email' => null,
-                    'transactionNo' => null,
-                    'status' => $status,
-                    'actionUrl' => $actionUrl,
-                    'createdAt' => optional($row->created_at)?->toIso8601String(),
-                    'unread' => $row->read_at === null,
-                    'manageable' => true,
-                ];
-            })
+        $inboxAlerts = $inboxRows
+            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets))
             // Hide web design quotation inbox items from non-Sales staff.
             ->filter(function (array $row) use ($isSales) {
                 if (($row['kind'] ?? '') === 'web_design_quotation') {
@@ -1107,6 +1107,128 @@ class CommerceAdminController extends Controller
             ->format($format);
     }
 
+    private function clientDisplayName(?User $customer): string
+    {
+        if (! $customer) {
+            return 'Client';
+        }
+
+        $company = trim((string) ($customer->mname ?: ''));
+        if ($company !== '') {
+            return $company;
+        }
+
+        $name = trim(($customer->fname ?? '') . ' ' . ($customer->lname ?? ''));
+        if ($name !== '') {
+            return $name;
+        }
+
+        return trim((string) ($customer->email ?: 'Client'));
+    }
+
+    private function inboxActionLabel(string $kind, ?string $actionUrl): string
+    {
+        $url = (string) $actionUrl;
+        if (str_contains($url, 'tab=approvals') || in_array($kind, ['payment_proof', 'profile_change'], true)) {
+            return 'Open Approvals';
+        }
+        if (str_contains($url, 'tab=helpdesk') || $kind === 'support_ticket') {
+            return 'Open Helpdesk';
+        }
+        if (str_contains($url, 'tab=invoices') || str_contains($url, 'tab=billing') || $kind === 'billing') {
+            return 'Open Billing';
+        }
+
+        return 'Open Deals';
+    }
+
+    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets): array
+    {
+        $referenceKey = (string) $row->reference_key;
+        $kind = match (true) {
+            str_starts_with($referenceKey, 'admin:payment-proof:') => 'payment_proof',
+            str_starts_with($referenceKey, 'admin:profile-change:') => 'profile_change',
+            str_starts_with($referenceKey, 'admin:support-ticket:') => 'support_ticket',
+            str_starts_with($referenceKey, 'admin:webdesign-quotation:') => 'web_design_quotation',
+            default => (string) ($row->type ?: 'general'),
+        };
+
+        $status = match ($kind) {
+            'payment_proof' => 'Pending Review',
+            'profile_change' => 'Pending Review',
+            'support_ticket' => 'Open',
+            'web_design_quotation' => 'Needs Pricing',
+            default => 'Unread',
+        };
+
+        $fromName = null;
+        $fromEmail = null;
+        $attachments = [];
+
+        if (preg_match('/^admin:payment-proof:(\d+)$/', $referenceKey, $match)) {
+            $proof = $proofs->get((int) $match[1]);
+            if ($proof) {
+                $fromName = $this->clientDisplayName($proof->customer);
+                $fromEmail = $proof->customer?->email;
+                $url = StorageUrl::publicAsset($proof->file_path);
+                if ($url) {
+                    $attachments[] = [
+                        'name' => $proof->file_name ?: basename((string) $proof->file_path),
+                        'url' => $url,
+                    ];
+                }
+            }
+        } elseif (preg_match('/^admin:profile-change:(\d+)$/', $referenceKey, $match)) {
+            $change = $profiles->get((int) $match[1]);
+            if ($change) {
+                $fromName = $this->clientDisplayName($change->customer);
+                $fromEmail = $change->customer?->email;
+                $payload = $change->requested_payload ?? [];
+                $avatarPath = $payload['avatar_path'] ?? null;
+                $url = StorageUrl::publicAsset($avatarPath);
+                if ($url) {
+                    $attachments[] = [
+                        'name' => basename((string) $avatarPath),
+                        'url' => $url,
+                    ];
+                }
+            }
+        } elseif (preg_match('/^admin:support-ticket:(\d+)$/', $referenceKey, $match)) {
+            $ticket = $tickets->get((int) $match[1]);
+            if ($ticket) {
+                $fromName = $this->clientDisplayName($ticket->customer);
+                $fromEmail = $ticket->customer?->email;
+            }
+        }
+
+        $actionUrl = $row->action_url ?: match ($kind) {
+            'payment_proof', 'profile_change' => '/public/commerce-admin?tab=approvals',
+            'support_ticket' => '/public/commerce-admin?tab=helpdesk',
+            'billing' => '/public/commerce-admin?tab=billing',
+            default => '/public/commerce-admin?tab=orders',
+        };
+
+        return [
+            'id' => (int) $row->id,
+            'kind' => $kind,
+            'title' => $row->title,
+            'desc' => $row->body,
+            'date' => $this->formatAppDateTime($row->created_at),
+            'audience' => $fromName ?: 'Assigned / Role Inbox',
+            'email' => $fromEmail,
+            'transactionNo' => null,
+            'status' => $status,
+            'actionUrl' => $actionUrl,
+            'createdAt' => optional($row->created_at)?->toIso8601String(),
+            'unread' => $row->read_at === null,
+            'manageable' => true,
+            'fromName' => $fromName,
+            'fromEmail' => $fromEmail,
+            'attachments' => $attachments,
+            'actionLabel' => $this->inboxActionLabel($kind, $actionUrl),
+        ];
+    }
+
     private function mapWebDesignQuotationAlert(SalesTransaction $row): array
     {
         $customer = $row->customer;
@@ -1145,6 +1267,10 @@ class CommerceAdminController extends Controller
             'createdAt' => optional($row->created_at ?? $row->transacted_at)?->toIso8601String(),
             'unread' => true,
             'manageable' => false,
+            'fromName' => $client,
+            'fromEmail' => $row->customer_email ?: ($customer?->email),
+            'attachments' => [],
+            'actionLabel' => 'Open Deals',
         ];
     }
 
