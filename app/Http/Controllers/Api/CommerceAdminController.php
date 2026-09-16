@@ -663,6 +663,7 @@ class CommerceAdminController extends Controller
         $proofIds = [];
         $profileIds = [];
         $ticketIds = [];
+        $orderIds = [];
         foreach ($inboxRows as $row) {
             $key = (string) $row->reference_key;
             if (preg_match('/^admin:payment-proof:(\d+)$/', $key, $m)) {
@@ -671,13 +672,15 @@ class CommerceAdminController extends Controller
                 $profileIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:support-ticket:(\d+)$/', $key, $m)) {
                 $ticketIds[] = (int) $m[1];
+            } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $key, $m)) {
+                $orderIds[] = (int) $m[1];
             }
         }
 
         $proofs = $proofIds === []
             ? collect()
             : CustomerPaymentProof::query()
-                ->with('customer:id,fname,lname,email,mname')
+                ->with(['customer:id,fname,lname,email,mname', 'salesTransaction.items'])
                 ->whereIn('id', $proofIds)
                 ->get()
                 ->keyBy('id');
@@ -695,9 +698,16 @@ class CommerceAdminController extends Controller
                 ->whereIn('id', $ticketIds)
                 ->get()
                 ->keyBy('id');
+        $orders = $orderIds === []
+            ? collect()
+            : SalesTransaction::query()
+                ->with(['customer:id,fname,lname,email,mname', 'items'])
+                ->whereIn('id', $orderIds)
+                ->get()
+                ->keyBy('id');
 
         $inboxAlerts = $inboxRows
-            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets))
+            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets, $orders))
             // Hide web design quotation inbox items from non-Sales staff.
             ->filter(function (array $row) use ($isSales) {
                 if (($row['kind'] ?? '') === 'web_design_quotation') {
@@ -1142,7 +1152,29 @@ class CommerceAdminController extends Controller
         return 'Open Deals';
     }
 
-    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets): array
+    private function inboxDetails(array $pairs): array
+    {
+        $rows = [];
+        foreach ($pairs as $label => $value) {
+            $text = trim((string) $value);
+            if ($text === '' || $text === '—') {
+                continue;
+            }
+            $rows[] = [
+                'label' => $label,
+                'value' => $text,
+            ];
+        }
+
+        return $rows;
+    }
+
+    private function formatInboxMoney($amount): string
+    {
+        return '₱' . number_format((float) $amount, 2);
+    }
+
+    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets, $orders): array
     {
         $referenceKey = (string) $row->reference_key;
         $kind = match (true) {
@@ -1164,12 +1196,37 @@ class CommerceAdminController extends Controller
         $fromName = null;
         $fromEmail = null;
         $attachments = [];
+        $details = [];
+        $intro = (string) $row->body;
+        $transactionNo = null;
 
         if (preg_match('/^admin:payment-proof:(\d+)$/', $referenceKey, $match)) {
             $proof = $proofs->get((int) $match[1]);
             if ($proof) {
-                $fromName = $this->clientDisplayName($proof->customer);
-                $fromEmail = $proof->customer?->email;
+                $customer = $proof->customer;
+                $transaction = $proof->salesTransaction;
+                $items = $transaction?->items;
+                $firstItem = $items?->first();
+                $fromName = $this->clientDisplayName($customer);
+                $fromEmail = $customer?->email;
+                $transactionNo = $transaction?->transaction_no ?: $proof->invoice_id;
+                $alreadyPaid = $this->isTransactionPaid($transaction);
+                $intro = $alreadyPaid
+                    ? "{$fromName} already paid through Paynamics and uploaded a payment receipt for billing review."
+                    : "{$fromName} uploaded a payment proof that still needs billing review.";
+                $details = $this->inboxDetails([
+                    'Client' => $fromName,
+                    'Email' => $fromEmail,
+                    'Invoice' => $proof->invoice_id,
+                    'Proof No' => $proof->proof_no,
+                    'Amount' => $transaction ? $this->formatInboxMoney(WebDesignQuotation::displayAmount($transaction)) : null,
+                    'Service' => TransactionLabelResolver::serviceCategoryFromItems($items),
+                    'Plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
+                    'Invoice Status' => $alreadyPaid ? 'Paid' : ($transaction?->payment_status ?: null),
+                    'Proof Status' => $proof->status,
+                    'Submitted' => $this->formatAppDateTime($proof->created_at),
+                    'Notes' => $proof->notes,
+                ]);
                 $url = StorageUrl::publicAsset($proof->file_path);
                 if ($url) {
                     $attachments[] = [
@@ -1183,6 +1240,24 @@ class CommerceAdminController extends Controller
             if ($change) {
                 $fromName = $this->clientDisplayName($change->customer);
                 $fromEmail = $change->customer?->email;
+                $intro = "{$fromName} submitted a profile update that needs approval before it is applied.";
+                $details = $this->inboxDetails([
+                    'Client' => $fromName,
+                    'Email' => $fromEmail,
+                    'Request No' => $change->request_no,
+                    'Status' => $change->status,
+                    'Summary' => $change->summary,
+                    'Submitted' => $this->formatAppDateTime($change->created_at),
+                ]);
+                foreach ($this->profileChangeFields($change) as $changeRow) {
+                    if (($changeRow['field'] ?? '') === 'avatar') {
+                        continue;
+                    }
+                    $details[] = [
+                        'label' => $changeRow['label'],
+                        'value' => ($changeRow['from'] ?? '—') . ' → ' . ($changeRow['to'] ?? '—'),
+                    ];
+                }
                 $payload = $change->requested_payload ?? [];
                 $avatarPath = $payload['avatar_path'] ?? null;
                 $url = StorageUrl::publicAsset($avatarPath);
@@ -1198,7 +1273,42 @@ class CommerceAdminController extends Controller
             if ($ticket) {
                 $fromName = $this->clientDisplayName($ticket->customer);
                 $fromEmail = $ticket->customer?->email;
+                $intro = "{$fromName} submitted a support ticket that needs a response.";
+                $details = $this->inboxDetails([
+                    'Client' => $fromName,
+                    'Email' => $fromEmail,
+                    'Ticket No' => $ticket->ticket_no,
+                    'Subject' => $ticket->subject,
+                    'Status' => $ticket->status,
+                    'Submitted' => $this->formatAppDateTime($ticket->created_at),
+                    'Message' => $ticket->message,
+                ]);
             }
+        } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $referenceKey, $match)) {
+            $order = $orders->get((int) $match[1]);
+            if ($order) {
+                $customer = $order->customer;
+                $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
+                $fromEmail = $customer?->email ?: $order->customer_email;
+                $transactionNo = $order->transaction_no;
+                $itemNames = $order->items ? $order->items->pluck('name')->filter()->take(4)->implode(', ') : '';
+                $intro = "{$fromName} cancelled this order. Review the deal record if follow-up is needed.";
+                $details = $this->inboxDetails([
+                    'Client' => $fromName,
+                    'Email' => $fromEmail,
+                    'Order No' => $order->transaction_no,
+                    'Items' => $itemNames,
+                    'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($order)),
+                    'Status' => $order->order_status ?: $order->payment_status,
+                    'Cancelled' => $this->formatAppDateTime($row->created_at),
+                ]);
+            }
+        } elseif ($kind === 'billing') {
+            $intro = $row->body ?: 'A client deleted one or more invoices from their billing list.';
+            $details = $this->inboxDetails([
+                'Notice' => $row->body,
+                'Recorded' => $this->formatAppDateTime($row->created_at),
+            ]);
         }
 
         $actionUrl = $row->action_url ?: match ($kind) {
@@ -1208,15 +1318,27 @@ class CommerceAdminController extends Controller
             default => '/public/commerce-admin?tab=orders',
         };
 
+        if ($details === []) {
+            $details = $this->inboxDetails([
+                'From' => $fromName,
+                'Email' => $fromEmail,
+                'Category' => $kind,
+                'Status' => $status,
+                'Recorded' => $this->formatAppDateTime($row->created_at),
+                'Details' => $row->body,
+            ]);
+        }
+
         return [
             'id' => (int) $row->id,
             'kind' => $kind,
             'title' => $row->title,
             'desc' => $row->body,
+            'intro' => $intro,
             'date' => $this->formatAppDateTime($row->created_at),
             'audience' => $fromName ?: 'Assigned / Role Inbox',
             'email' => $fromEmail,
-            'transactionNo' => null,
+            'transactionNo' => $transactionNo,
             'status' => $status,
             'actionUrl' => $actionUrl,
             'createdAt' => optional($row->created_at)?->toIso8601String(),
@@ -1225,6 +1347,7 @@ class CommerceAdminController extends Controller
             'fromName' => $fromName,
             'fromEmail' => $fromEmail,
             'attachments' => $attachments,
+            'details' => $details,
             'actionLabel' => $this->inboxActionLabel($kind, $actionUrl),
         ];
     }
@@ -1256,6 +1379,7 @@ class CommerceAdminController extends Controller
                 . ($itemNames ? " ({$itemNames})" : '')
                 . ". Transaction {$row->transaction_no}."
             ),
+            'intro' => "{$client} has a web design order that still needs sales action.",
             'date' => $this->formatAppDateTime(
                 $row->created_at ?? $row->transacted_at
             ),
@@ -1270,6 +1394,15 @@ class CommerceAdminController extends Controller
             'fromName' => $client,
             'fromEmail' => $row->customer_email ?: ($customer?->email),
             'attachments' => [],
+            'details' => $this->inboxDetails([
+                'Client' => $client,
+                'Email' => $row->customer_email ?: ($customer?->email),
+                'Order No' => $row->transaction_no,
+                'Items' => $itemNames,
+                'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($row)),
+                'Status' => $status,
+                'Payment Status' => $row->payment_status,
+            ]),
             'actionLabel' => 'Open Deals',
         ];
     }
