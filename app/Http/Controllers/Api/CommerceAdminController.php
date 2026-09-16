@@ -693,7 +693,9 @@ class CommerceAdminController extends Controller
                     'transactionNo' => null,
                     'status' => $status,
                     'actionUrl' => $actionUrl,
+                    'createdAt' => optional($row->created_at)?->toIso8601String(),
                     'unread' => $row->read_at === null,
+                    'manageable' => true,
                 ];
             })
             // Hide web design quotation inbox items from non-Sales staff.
@@ -730,6 +732,40 @@ class CommerceAdminController extends Controller
                 ],
             ],
         ]);
+    }
+
+    public function markNotificationRead(Request $request, CustomerNotification $notification)
+    {
+        $staff = $this->resolveStaff($request);
+        abort_unless((int) $notification->customer_id === (int) $staff->id, 403);
+
+        if (!$notification->read_at) {
+            $notification->update(['read_at' => now()]);
+        }
+
+        return response()->json(['message' => 'Notification marked as read']);
+    }
+
+    public function markAllNotificationsRead(Request $request)
+    {
+        $staff = $this->resolveStaff($request);
+
+        CustomerNotification::query()
+            ->where('customer_id', $staff->id)
+            ->whereNull('read_at')
+            ->update(['read_at' => now()]);
+
+        return response()->json(['message' => 'All notifications marked as read']);
+    }
+
+    public function deleteNotification(Request $request, CustomerNotification $notification)
+    {
+        $staff = $this->resolveStaff($request);
+        abort_unless((int) $notification->customer_id === (int) $staff->id, 403);
+
+        $notification->delete();
+
+        return response()->json(['message' => 'Notification dismissed']);
     }
 
     public function broadcastNotification(Request $request)
@@ -1106,6 +1142,9 @@ class CommerceAdminController extends Controller
             'transactionNo' => $row->transaction_no,
             'status' => $status,
             'actionUrl' => '/public/commerce-admin?tab=orders',
+            'createdAt' => optional($row->created_at ?? $row->transacted_at)?->toIso8601String(),
+            'unread' => true,
+            'manageable' => false,
         ];
     }
 

@@ -83,6 +83,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/tickets/{ticket}', [CommerceAdminController::class, 'updateTicket']);
         Route::get('/services', [CommerceAdminController::class, 'services']);
         Route::get('/notifications', [CommerceAdminController::class, 'notifications']);
+        Route::patch('/notifications/read-all', [CommerceAdminController::class, 'markAllNotificationsRead']);
+        Route::patch('/notifications/{notification}/read', [CommerceAdminController::class, 'markNotificationRead']);
+        Route::delete('/notifications/{notification}', [CommerceAdminController::class, 'deleteNotification']);
         Route::post('/notifications/broadcast', [CommerceAdminController::class, 'broadcastNotification']);
         Route::get('/assignable-users', [CommerceAdminController::class, 'assignableUsers']);
         Route::patch('/sales-transactions/{salesTransaction}/assign', [CommerceAdminController::class, 'assignSalesTransaction']);
