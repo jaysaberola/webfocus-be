@@ -534,6 +534,7 @@ class CustomerPortalController extends Controller
                 'title' => $row->title,
                 'desc' => $row->body,
                 'date' => optional($row->created_at)->format('Y-m-d'),
+                'createdAt' => optional($row->created_at)?->toIso8601String(),
                 'unread' => $row->read_at === null,
                 'type' => $row->type,
                 'actionUrl' => $row->action_url,
