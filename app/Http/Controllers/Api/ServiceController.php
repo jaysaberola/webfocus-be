@@ -11,7 +11,7 @@ class ServiceController extends Controller
 {
     public function index(Request $request)
     {
-        $perPage = max(1, min($request->integer('per_page', 10), 100));
+        $perPage = max(1, min($request->integer('per_page', 10), 500));
 
         $query = Service::query()->with('category:id,name,sort_order,position');
 
