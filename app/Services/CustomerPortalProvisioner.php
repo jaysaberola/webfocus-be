@@ -150,6 +150,10 @@ class CustomerPortalProvisioner
             return self::STATUS_ACTIVE;
         }
 
+        if (self::hasUnverifiedPaymentProof($transaction)) {
+            return self::STATUS_AWAITING_APPROVAL;
+        }
+
         if ($paid) {
             return self::STATUS_PROVISIONING;
         }
@@ -179,6 +183,17 @@ class CustomerPortalProvisioner
     public static function isActiveStatus(?string $status): bool
     {
         return in_array($status, ['Active', self::STATUS_ACTIVE], true);
+    }
+
+    public static function hasUnverifiedPaymentProof(SalesTransaction $transaction): bool
+    {
+        return CustomerPaymentProof::query()
+            ->where(function ($query) use ($transaction) {
+                $query->where('sales_transaction_id', $transaction->id)
+                    ->orWhere('invoice_id', 'INV-' . $transaction->transaction_no);
+            })
+            ->where('status', 'Pending Review')
+            ->exists();
     }
 
     public static function isPaymentSubmitted(SalesTransaction $transaction): bool

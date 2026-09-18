@@ -383,7 +383,7 @@ class CommerceAdminController extends Controller
                 'payment_status' => 'paid',
                 'order_status' => $paymentProof->salesTransaction->order_status === 'cancelled'
                     ? 'cancelled'
-                    : 'active',
+                    : 'processing',
                 'notes' => trim(($paymentProof->salesTransaction->notes ?? '') . "\nPayment verified via proof {$paymentProof->proof_no}."),
             ]);
 

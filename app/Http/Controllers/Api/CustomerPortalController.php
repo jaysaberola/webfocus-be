@@ -397,6 +397,7 @@ class CustomerPortalController extends Controller
         }
 
         app(CustomerPortalNotificationSync::class)->syncForCustomer($customer->id);
+        app(CustomerPortalProvisioner::class)->refreshServicesFromTransaction($transaction->fresh(['items']));
 
         return response()->json([
             'message' => $message,
