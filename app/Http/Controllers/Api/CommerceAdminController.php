@@ -1212,10 +1212,13 @@ class CommerceAdminController extends Controller
         $details = [];
         $intro = (string) $row->body;
         $transactionNo = null;
+        $referenceId = null;
 
         if (preg_match('/^admin:payment-proof:(\d+)$/', $referenceKey, $match)) {
             $proof = $proofs->get((int) $match[1]);
             if ($proof) {
+                $referenceId = (int) $proof->id;
+                $status = (string) ($proof->status ?: 'Pending Review');
                 $customer = $proof->customer;
                 $transaction = $proof->salesTransaction;
                 $items = $transaction?->items;
@@ -1251,6 +1254,8 @@ class CommerceAdminController extends Controller
         } elseif (preg_match('/^admin:profile-change:(\d+)$/', $referenceKey, $match)) {
             $change = $profiles->get((int) $match[1]);
             if ($change) {
+                $referenceId = (int) $change->id;
+                $status = (string) ($change->status ?: 'Pending Review');
                 $fromName = $this->clientDisplayName($change->customer);
                 $fromEmail = $change->customer?->email;
                 $intro = "{$fromName} submitted a profile update that needs approval before it is applied.";
@@ -1357,6 +1362,7 @@ class CommerceAdminController extends Controller
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'unread' => $row->read_at === null,
             'manageable' => true,
+            'referenceId' => $referenceId,
             'fromName' => $fromName,
             'fromEmail' => $fromEmail,
             'attachments' => $attachments,
