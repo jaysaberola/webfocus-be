@@ -2,27 +2,36 @@
 
 namespace App\Support;
 
+use Carbon\Carbon;
+use Carbon\CarbonInterface;
+use Throwable;
+
 class PaynamicsProofEvaluator
 {
     public const CODE_OK = 'ok';
     public const CODE_UNREADABLE = 'unreadable';
     public const CODE_NOT_PAYNAMICS = 'not_paynamics';
     public const CODE_AMOUNT_MISMATCH = 'amount_mismatch';
+    public const CODE_DATE_MISMATCH = 'date_mismatch';
     public const CODE_NOT_SUCCESS = 'not_success';
     public const CODE_CHECKOUT_PAGE = 'checkout_page';
     public const CODE_WRONG_INVOICE = 'wrong_invoice';
     public const CODE_REQUEST_ID_MISMATCH = 'request_id_mismatch';
 
+    private const TIME_WINDOW_MINUTES = 120;
+
     /**
      * @param  array<int, string>  $requestIds
      * @param  array<int, string>  $foreignRequestIds
-     * @return array{valid: bool, code: string, message: string, has_brand: bool, has_amount: bool, has_success: bool, matched_request_id: ?string}
+     * @param  array<int, CarbonInterface|string|int>  $expectedPaidAts
+     * @return array{valid: bool, code: string, message: string, has_brand: bool, has_amount: bool, has_success: bool, has_date: bool, matched_request_id: ?string}
      */
     public static function evaluate(
         string $text,
         float $amount,
         array $requestIds = [],
-        array $foreignRequestIds = []
+        array $foreignRequestIds = [],
+        array $expectedPaidAts = []
     ): array {
         $normalized = self::normalize($text);
         $compact = preg_replace('/\s+/', '', $normalized) ?? '';
@@ -40,6 +49,8 @@ class PaynamicsProofEvaluator
         $extractedRequestIds = self::extractRequestIds($compact);
         $hasAmount = self::hasAmount($text, $normalized, $amount);
         $hasSuccess = self::hasSuccess($normalized, $compact);
+        $receiptTimes = self::extractReceiptDateTimes($text, $normalized);
+        $hasDate = $receiptTimes !== [];
         $isCheckout = self::isCheckoutPage($normalized, $compact) && ! $hasSuccess && $matchedRequestId === null;
         $expectedIds = self::normalizeIdList($requestIds);
         $foreignIds = self::normalizeIdList($foreignRequestIds);
@@ -53,6 +64,7 @@ class PaynamicsProofEvaluator
                 $hasAmount,
                 $hasSuccess,
                 $matchedRequestId,
+                $hasDate,
             );
         }
 
@@ -65,6 +77,8 @@ class PaynamicsProofEvaluator
                 $hasBrand,
                 $hasAmount,
                 $hasSuccess,
+                null,
+                $hasDate,
             );
         }
 
@@ -77,6 +91,8 @@ class PaynamicsProofEvaluator
                     $hasBrand,
                     $hasAmount,
                     $hasSuccess,
+                    null,
+                    $hasDate,
                 );
             }
 
@@ -87,6 +103,8 @@ class PaynamicsProofEvaluator
                 $hasBrand,
                 $hasAmount,
                 $hasSuccess,
+                null,
+                $hasDate,
             );
         }
 
@@ -98,6 +116,8 @@ class PaynamicsProofEvaluator
                 $hasBrand,
                 $hasAmount,
                 $hasSuccess,
+                $matchedRequestId,
+                $hasDate,
             );
         }
 
@@ -109,6 +129,8 @@ class PaynamicsProofEvaluator
                 $hasBrand,
                 $hasAmount,
                 $hasSuccess,
+                $matchedRequestId,
+                $hasDate,
             );
         }
 
@@ -120,6 +142,22 @@ class PaynamicsProofEvaluator
                 $hasBrand,
                 $hasAmount,
                 $hasSuccess,
+                $matchedRequestId,
+                $hasDate,
+            );
+        }
+
+        $expectedTimes = self::normalizeExpectedPaidAts($expectedPaidAts, $requestIds);
+        if ($hasDate && $expectedTimes !== [] && ! self::receiptDateMatches($receiptTimes, $expectedTimes)) {
+            return self::result(
+                false,
+                self::CODE_DATE_MISMATCH,
+                'The date and time on this receipt do not match this Paynamics payment. Upload the Payment Success receipt for this invoice.',
+                $hasBrand,
+                $hasAmount,
+                $hasSuccess,
+                $matchedRequestId,
+                true,
             );
         }
 
@@ -131,6 +169,7 @@ class PaynamicsProofEvaluator
             $hasAmount,
             $hasSuccess,
             $matchedRequestId,
+            $hasDate,
         );
     }
 
@@ -234,6 +273,159 @@ class PaynamicsProofEvaluator
         }
 
         return false;
+    }
+
+    /**
+     * @param  array<int, CarbonInterface|string|int>  $expectedPaidAts
+     * @param  array<int, string>  $requestIds
+     * @return array<int, Carbon>
+     */
+    private static function normalizeExpectedPaidAts(array $expectedPaidAts, array $requestIds): array
+    {
+        $times = [];
+
+        foreach ($expectedPaidAts as $value) {
+            $parsed = self::toCarbon($value);
+            if ($parsed) {
+                $times[] = $parsed;
+            }
+        }
+
+        foreach ($requestIds as $requestId) {
+            $fromId = self::paidAtFromRequestId((string) $requestId);
+            if ($fromId) {
+                $times[] = $fromId;
+            }
+        }
+
+        return $times;
+    }
+
+    /**
+     * @return array<int, Carbon>
+     */
+    private static function extractReceiptDateTimes(string $text, string $normalized): array
+    {
+        $haystack = strtolower($text . ' ' . $normalized);
+        $haystack = preg_replace('/\s+/', ' ', $haystack) ?? $haystack;
+        $found = [];
+
+        $patterns = [
+            '/(?:payment\s+date|paid\s+(?:on|at)|transaction\s+date|date(?:\s*\/\s*time)?|txn\s+time)\s*[:\-]?\s*([a-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)/i',
+            '/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/i',
+            '/\b(\d{4}-\d{2}-\d{2}(?:[ t]\d{1,2}:\d{2}(?::\d{2})?)?)\b/',
+            '/\b(\d{1,2}\/\d{1,2}\/\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
+            '/\b(\d{1,2}-\d{1,2}-\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (! preg_match_all($pattern, $haystack, $matches)) {
+                continue;
+            }
+
+            foreach ($matches[1] as $raw) {
+                $parsed = self::toCarbon($raw);
+                if ($parsed) {
+                    $found[] = $parsed;
+                }
+            }
+        }
+
+        return $found;
+    }
+
+    /**
+     * @param  array<int, Carbon>  $receiptTimes
+     * @param  array<int, Carbon>  $expectedTimes
+     */
+    private static function receiptDateMatches(array $receiptTimes, array $expectedTimes): bool
+    {
+        foreach ($receiptTimes as $found) {
+            foreach ($expectedTimes as $expected) {
+                if (! $found->isSameDay($expected)) {
+                    continue;
+                }
+
+                if (! self::hasClockTime($found)) {
+                    return true;
+                }
+
+                if (abs($found->diffInMinutes($expected)) <= self::TIME_WINDOW_MINUTES) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static function hasClockTime(Carbon $value): bool
+    {
+        return $value->hour !== 0 || $value->minute !== 0 || $value->second !== 0;
+    }
+
+    private static function paidAtFromRequestId(string $requestId): ?Carbon
+    {
+        $id = self::normalizeId($requestId);
+        if (! preg_match('/^WF(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/', $id, $match)) {
+            return null;
+        }
+
+        try {
+            return Carbon::create(
+                2000 + (int) $match[1],
+                (int) $match[2],
+                (int) $match[3],
+                (int) $match[4],
+                (int) $match[5],
+                (int) $match[6],
+                self::timezone()
+            );
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private static function toCarbon(mixed $value): ?Carbon
+    {
+        if ($value instanceof CarbonInterface) {
+            return Carbon::instance($value)->timezone(self::timezone());
+        }
+
+        if (is_int($value) || (is_string($value) && ctype_digit($value) && strlen($value) >= 10)) {
+            try {
+                return Carbon::createFromTimestamp((int) $value, self::timezone());
+            } catch (Throwable) {
+                return null;
+            }
+        }
+
+        $raw = trim((string) $value);
+        if ($raw === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($raw, self::timezone());
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    private static function timezone(): string
+    {
+        try {
+            if (function_exists('config')) {
+                $zone = (string) config('app.timezone');
+                if ($zone !== '') {
+                    return $zone;
+                }
+            }
+        } catch (Throwable) {
+            // Unit tests and bare autoload have no app container.
+        }
+
+        return 'Asia/Manila';
     }
 
     /**
@@ -345,7 +537,7 @@ class PaynamicsProofEvaluator
     }
 
     /**
-     * @return array{valid: bool, code: string, message: string, has_brand: bool, has_amount: bool, has_success: bool, matched_request_id: ?string}
+     * @return array{valid: bool, code: string, message: string, has_brand: bool, has_amount: bool, has_success: bool, has_date: bool, matched_request_id: ?string}
      */
     private static function result(
         bool $valid,
@@ -354,7 +546,8 @@ class PaynamicsProofEvaluator
         bool $hasBrand = false,
         bool $hasAmount = false,
         bool $hasSuccess = false,
-        ?string $matchedRequestId = null
+        ?string $matchedRequestId = null,
+        bool $hasDate = false
     ): array {
         return [
             'valid' => $valid,
@@ -363,6 +556,7 @@ class PaynamicsProofEvaluator
             'has_brand' => $hasBrand,
             'has_amount' => $hasAmount,
             'has_success' => $hasSuccess,
+            'has_date' => $hasDate,
             'matched_request_id' => $matchedRequestId,
         ];
     }

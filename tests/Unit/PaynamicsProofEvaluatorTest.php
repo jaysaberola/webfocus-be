@@ -112,6 +112,73 @@ class PaynamicsProofEvaluatorTest extends TestCase
         $this->assertSame('WF260915105840VHPNDTW3', $result['matched_request_id']);
     }
 
+    public function test_accepts_matching_payment_date_and_time(): void
+    {
+        $text = <<<TXT
+        Paynamics
+        Payment Success
+        Request ID: WF260915105840VHPNDTW3
+        Amount PHP 23,400.00
+        Payment Date Sep 15, 2026 10:59 AM
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            23400.00,
+            ['WF260915105840VHPNDTW3'],
+            [],
+            ['2026-09-15 10:59:00']
+        );
+
+        $this->assertTrue($result['valid']);
+        $this->assertTrue($result['has_date']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
+    }
+
+    public function test_rejects_wrong_payment_date(): void
+    {
+        $text = <<<TXT
+        Paynamics
+        Payment Success
+        Request ID: WF260915105840VHPNDTW3
+        Amount PHP 23,400.00
+        Payment Date Aug 01, 2026 10:59 AM
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            23400.00,
+            ['WF260915105840VHPNDTW3'],
+            [],
+            ['2026-09-15 10:59:00']
+        );
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_DATE_MISMATCH, $result['code']);
+    }
+
+    public function test_rejects_same_date_with_unrelated_time(): void
+    {
+        $text = <<<TXT
+        Paynamics
+        Payment Success
+        Request ID: WF260915105840VHPNDTW3
+        Amount PHP 23,400.00
+        Payment Date Sep 15, 2026 3:10 AM
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            23400.00,
+            ['WF260915105840VHPNDTW3'],
+            [],
+            ['2026-09-15 10:59:00']
+        );
+
+        $this->assertFalse($result['valid']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_DATE_MISMATCH, $result['code']);
+    }
+
     public function test_rejects_success_receipt_for_a_different_invoice(): void
     {
         $text = <<<TXT

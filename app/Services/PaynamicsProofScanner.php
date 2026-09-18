@@ -14,14 +14,15 @@ use Throwable;
 class PaynamicsProofScanner
 {
     /**
-     * @return array{valid: bool, code: string, message: string, has_brand: bool, has_amount: bool, has_success: bool, matched_request_id: ?string}
+     * @return array{valid: bool, code: string, message: string, has_brand: bool, has_amount: bool, has_success: bool, has_date: bool, matched_request_id: ?string}
      */
     public function scan(UploadedFile $file, SalesTransaction $transaction, ?string $clientText = null): array
     {
         $extracted = $this->extractText($file);
         $text = PaynamicsProofEvaluator::looksReadable($extracted) ? $extracted : trim((string) $clientText);
         $amount = WebDesignQuotation::displayAmount($transaction);
-        $requestIds = $transaction->paynamicsPaymentReferences()
+        $references = $transaction->paynamicsPaymentReferences()->get(['request_id', 'paid_at']);
+        $requestIds = $references
             ->pluck('request_id')
             ->filter()
             ->values()
@@ -32,8 +33,13 @@ class PaynamicsProofScanner
             ->filter()
             ->values()
             ->all();
+        $expectedPaidAts = $references
+            ->pluck('paid_at')
+            ->filter()
+            ->values()
+            ->all();
 
-        return PaynamicsProofEvaluator::evaluate($text, $amount, $requestIds, $foreignRequestIds);
+        return PaynamicsProofEvaluator::evaluate($text, $amount, $requestIds, $foreignRequestIds, $expectedPaidAts);
     }
 
     private function extractText(UploadedFile $file): string
