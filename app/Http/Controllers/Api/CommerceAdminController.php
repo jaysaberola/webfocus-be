@@ -246,7 +246,7 @@ class CommerceAdminController extends Controller
 
     public function dashboard(Request $request)
     {
-        $this->resolveStaff($request);
+        $staff = $this->resolveStaff($request);
 
         $newOrders = SalesTransaction::query()
             ->with(['customer:id,fname,lname,email', 'items'])
@@ -292,6 +292,7 @@ class CommerceAdminController extends Controller
                 'counts' => [
                     'pendingApprovals' => $pendingProofs + $pendingProfileChanges,
                     'pendingQuotations' => $pendingQuotations,
+                    'unreadNotifications' => $this->staffUnreadNotificationCount($staff),
                     'openTickets' => $openTickets,
                     'activeClients' => $activeClients,
                     'activeServices' => $activeServices,
@@ -718,9 +719,9 @@ class CommerceAdminController extends Controller
             })
             ->values();
 
-        // Deduplicate by title+desc+kind while preferring live quotation rows.
-        $merged = $clientAlerts
-            ->concat($inboxAlerts)
+        // Prefer inbox copies so read/unread comes from the staff mailbox, not live work-queue rows.
+        $merged = $inboxAlerts
+            ->concat($clientAlerts)
             ->unique(function (array $row) {
                 return ($row['kind'] ?? '') . '|' . ($row['title'] ?? '') . '|' . ($row['desc'] ?? '');
             })
@@ -735,6 +736,7 @@ class CommerceAdminController extends Controller
             'meta' => [
                 'pendingQuotations' => $merged->where('kind', 'web_design_quotation')->count(),
                 'inboxCount' => $inboxAlerts->count(),
+                'unreadCount' => $this->staffUnreadNotificationCount($staff),
                 'broadcasts' => [
                     'current_page' => 1,
                     'last_page' => 1,
@@ -766,6 +768,17 @@ class CommerceAdminController extends Controller
             ->update(['read_at' => now()]);
 
         return response()->json(['message' => 'All notifications marked as read']);
+    }
+
+    public function unreadNotificationCount(Request $request)
+    {
+        $staff = $this->resolveStaff($request);
+
+        return response()->json([
+            'data' => [
+                'count' => $this->staffUnreadNotificationCount($staff),
+            ],
+        ]);
     }
 
     public function deleteNotification(Request $request, CustomerNotification $notification)
@@ -1389,7 +1402,7 @@ class CommerceAdminController extends Controller
             'status' => $status,
             'actionUrl' => '/public/commerce-admin?tab=orders',
             'createdAt' => optional($row->created_at ?? $row->transacted_at)?->toIso8601String(),
-            'unread' => true,
+            'unread' => false,
             'manageable' => false,
             'fromName' => $client,
             'fromEmail' => $row->customer_email ?: ($customer?->email),
@@ -1405,6 +1418,39 @@ class CommerceAdminController extends Controller
             ]),
             'actionLabel' => 'Open Deals',
         ];
+    }
+
+    private function staffInboxNotificationQuery(User $staff)
+    {
+        $isSales = $staff->hasAnyRole(['sales_admin', 'sales_staff']);
+
+        return CustomerNotification::query()
+            ->where('customer_id', $staff->id)
+            ->where(function ($query) {
+                $query->where('reference_key', 'like', 'admin:%')
+                    ->orWhereIn('type', [
+                        'web_design_quotation',
+                        'payment_proof',
+                        'profile_change',
+                        'support_ticket',
+                    ]);
+            })
+            ->when(! $isSales, function ($query) {
+                $query->where(function ($inner) {
+                    $inner->whereNull('type')
+                        ->orWhere('type', '!=', 'web_design_quotation');
+                })->where(function ($inner) {
+                    $inner->whereNull('reference_key')
+                        ->orWhere('reference_key', 'not like', 'admin:webdesign-quotation:%');
+                });
+            });
+    }
+
+    private function staffUnreadNotificationCount(User $staff): int
+    {
+        return (int) $this->staffInboxNotificationQuery($staff)
+            ->whereNull('read_at')
+            ->count();
     }
 
     private function pendingPaymentProofCount(): int

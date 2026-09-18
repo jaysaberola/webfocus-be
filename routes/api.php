@@ -83,6 +83,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/tickets/{ticket}', [CommerceAdminController::class, 'updateTicket']);
         Route::get('/services', [CommerceAdminController::class, 'services']);
         Route::get('/notifications', [CommerceAdminController::class, 'notifications']);
+        Route::get('/notifications/unread-count', [CommerceAdminController::class, 'unreadNotificationCount']);
         Route::patch('/notifications/read-all', [CommerceAdminController::class, 'markAllNotificationsRead']);
         Route::patch('/notifications/{notification}/read', [CommerceAdminController::class, 'markNotificationRead']);
         Route::delete('/notifications/{notification}', [CommerceAdminController::class, 'deleteNotification']);
