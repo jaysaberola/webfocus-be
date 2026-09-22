@@ -1200,7 +1200,7 @@ class CustomerPortalController extends Controller
             ];
         }
 
-        return null;
+        return DealMeta::pricedCatalogItem($name);
     }
 
     private function mapOrder(SalesTransaction $row): array

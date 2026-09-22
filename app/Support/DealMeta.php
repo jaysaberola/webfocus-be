@@ -2,8 +2,10 @@
 
 namespace App\Support;
 
+use App\Models\DomainCategory;
 use App\Models\SalesTransaction;
 use Illuminate\Support\Collection;
+use Throwable;
 
 class DealMeta
 {
@@ -94,6 +96,78 @@ class DealMeta
         $cost = (float) ($meta['domainRegistrationCost'] ?? 0);
 
         return $cost > 0 ? round($cost, 2) : 0.0;
+    }
+
+    /**
+     * @return array{product_id: null, name: string, price: float, item_type: string}|null
+     */
+    public static function pricedCatalogItem(string $name): ?array
+    {
+        $type = self::matchType($name);
+        if ($type === null) {
+            return null;
+        }
+
+        $price = self::FALLBACK_PRICES[$type] ?? 0.0;
+        try {
+            $categories = DomainCategory::query()
+                ->where('active', true)
+                ->get(['name', 'selling_price']);
+            foreach ($categories as $category) {
+                if (self::matchType((string) $category->name) !== $type) {
+                    continue;
+                }
+                $selling = (float) $category->selling_price;
+                if ($selling > 0) {
+                    $price = $selling;
+                    break;
+                }
+            }
+        } catch (Throwable) {
+            // Keep the fallback selling price when domain categories are unavailable.
+        }
+
+        if ($price <= 0) {
+            return null;
+        }
+
+        return [
+            'product_id' => null,
+            'name' => $type,
+            'price' => round($price, 2),
+            'item_type' => 'domain',
+        ];
+    }
+
+    public static function matchType(string $name): ?string
+    {
+        $norm = strtolower(trim(preg_replace('/[^a-z0-9]+/', ' ', $name) ?? ''));
+        $norm = trim(preg_replace('/\s+/', ' ', $norm) ?? $norm);
+        if ($norm === '') {
+            return null;
+        }
+
+        $aliases = [
+            'country level domain' => 'Country Level Domain',
+            'country level domains' => 'Country Level Domain',
+            'top level domain' => 'Top Level Domain',
+            'top level domains' => 'Top Level Domain',
+            'hybrid top level domain' => 'Hybrid Top Level Domain',
+            'hybrid top level domains' => 'Hybrid Top Level Domain',
+            'educational domain' => 'Educational Domain',
+            'education domain' => 'Educational Domain',
+            'education domains' => 'Educational Domain',
+            'government domain' => 'Government Domain',
+            'government domains' => 'Government Domain',
+        ];
+
+        foreach ($aliases as $alias => $type) {
+            if ($norm === $alias || str_starts_with($norm, $alias.' ')) {
+                return $type;
+            }
+        }
+
+        return null;
     }
 
     /**
