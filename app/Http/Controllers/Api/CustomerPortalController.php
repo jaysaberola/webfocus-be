@@ -8,9 +8,11 @@ use App\Models\CustomerPaymentProof;
 use App\Models\CustomerProfileChangeRequest;
 use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
+use App\Models\Product;
 use App\Models\SalesTransaction;
 use App\Models\SalesTransactionItem;
 use App\Models\SalesTransactionProposal;
+use App\Models\Service;
 use App\Models\User;
 use App\Support\PendingCheckoutGuard;
 use App\Support\RelatedPaymentSync;
@@ -179,6 +181,101 @@ class CustomerPortalController extends Controller
 
         return response()->json([
             'message' => 'Order cancelled.',
+            'data' => $this->mapOrder($salesTransaction->fresh(['items', 'paynamicsPaymentReferences'])),
+        ]);
+    }
+
+    public function updateOrderItems(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+
+        $salesTransaction->loadMissing('items');
+        $status = CustomerPortalProvisioner::resolveServiceStatus($salesTransaction);
+        abort_if(
+            in_array(strtolower((string) $salesTransaction->payment_status), ['paid', 'completed', 'success'], true),
+            422,
+            'Paid orders cannot be edited.'
+        );
+        abort_if(
+            in_array($status, [
+                CustomerPortalProvisioner::STATUS_ACTIVE,
+                CustomerPortalProvisioner::STATUS_PROVISIONING,
+                CustomerPortalProvisioner::STATUS_AWAITING_APPROVAL,
+                CustomerPortalProvisioner::STATUS_CANCELLED,
+            ], true),
+            422,
+            'This order can no longer be customized.'
+        );
+        abort_if(
+            WebDesignQuotation::isPendingQuotation($salesTransaction),
+            422,
+            'Pending quotation orders cannot be edited here.'
+        );
+
+        $validated = $request->validate([
+            'items' => ['required', 'array', 'min:1', 'max:40'],
+            'items.*.id' => ['nullable'],
+            'items.*.name' => ['nullable', 'string', 'max:255'],
+            'items.*.quantity' => ['required', 'numeric', 'min:1', 'max:99'],
+        ]);
+
+        $existing = $salesTransaction->items->keyBy(fn ($item) => (string) $item->id);
+        $next = [];
+
+        foreach ($validated['items'] as $row) {
+            $quantity = max(1, (float) $row['quantity']);
+            $rowId = isset($row['id']) && $row['id'] !== '' && $row['id'] !== null
+                ? (string) $row['id']
+                : '';
+
+            if ($rowId !== '' && $existing->has($rowId)) {
+                $item = $existing->get($rowId);
+                $unit = (float) $item->price;
+                $next[] = [
+                    'product_id' => $item->product_id,
+                    'name' => $item->name,
+                    'item_type' => $item->item_type,
+                    'price' => $unit,
+                    'quantity' => $quantity,
+                    'total_price' => round($unit * $quantity, 2),
+                ];
+                continue;
+            }
+
+            $name = trim((string) ($row['name'] ?? ''));
+            abort_if($name === '', 422, 'Each new item needs a product name.');
+
+            $catalog = $this->findCatalogPricedItem($name);
+            abort_unless($catalog, 422, "No catalog price is available for {$name}.");
+
+            $next[] = [
+                'product_id' => $catalog['product_id'],
+                'name' => $catalog['name'],
+                'item_type' => $catalog['item_type'],
+                'price' => $catalog['price'],
+                'quantity' => $quantity,
+                'total_price' => round($catalog['price'] * $quantity, 2),
+            ];
+        }
+
+        $subtotal = round(collect($next)->sum('total_price'), 2);
+
+        DB::transaction(function () use ($salesTransaction, $next, $subtotal) {
+            $salesTransaction->items()->delete();
+            foreach ($next as $item) {
+                $salesTransaction->items()->create($item);
+            }
+            $salesTransaction->update([
+                'subtotal' => $subtotal,
+                'discount_total' => 0,
+                'tax_total' => 0,
+                'grand_total' => $subtotal,
+            ]);
+        });
+
+        return response()->json([
+            'message' => 'Order updated.',
             'data' => $this->mapOrder($salesTransaction->fresh(['items', 'paynamicsPaymentReferences'])),
         ]);
     }
@@ -1058,14 +1155,77 @@ class CustomerPortalController extends Controller
         ];
     }
 
+    private function findCatalogPricedItem(string $name): ?array
+    {
+        $needle = mb_strtolower(trim($name));
+        if ($needle === '') {
+            return null;
+        }
+
+        $normalize = static function ($value): string {
+            return trim(preg_replace('/[^a-z0-9]+/', ' ', mb_strtolower((string) $value)) ?? '');
+        };
+        $norm = $normalize($name);
+
+        $matchRow = static function ($query) use ($needle, $norm, $normalize) {
+            $exact = (clone $query)->whereRaw('LOWER(name) = ?', [$needle])->first();
+            if ($exact) {
+                return $exact;
+            }
+
+            return $query->get(['id', 'name', 'price'])->first(
+                fn ($row) => $normalize($row->name) === $norm
+            );
+        };
+
+        $product = $matchRow(Product::query());
+        if ($product && (float) $product->price > 0) {
+            return [
+                'product_id' => $product->id,
+                'name' => $product->name,
+                'price' => (float) $product->price,
+                'item_type' => 'product',
+            ];
+        }
+
+        $service = $matchRow(Service::query());
+        if ($service && (float) $service->price > 0) {
+            return [
+                'product_id' => null,
+                'name' => $service->name,
+                'price' => (float) $service->price,
+                'item_type' => 'service',
+            ];
+        }
+
+        return null;
+    }
+
     private function mapOrder(SalesTransaction $row): array
     {
         $firstItem = $row->items->first();
-        $items = $row->items->map(fn ($item) => [
-            'name' => TransactionLabelResolver::serviceCategory($item->name, $item->item_type),
-            'detail' => $item->name,
-            'price' => (float) $item->total_price,
-        ])->values()->all();
+        $items = $row->items->map(function ($item) {
+            $quantity = (float) $item->quantity ?: 1;
+            $unit = (float) $item->price;
+            $total = (float) $item->total_price;
+            if ($total <= 0) {
+                $total = round($unit * $quantity, 2);
+            }
+            if ($unit <= 0 && $quantity > 0) {
+                $unit = round($total / $quantity, 2);
+            }
+
+            return [
+                'id' => $item->id,
+                'name' => TransactionLabelResolver::serviceCategory($item->name, $item->item_type),
+                'detail' => $item->name,
+                'itemType' => $item->item_type,
+                'quantity' => $quantity,
+                'unitPrice' => $unit,
+                'price' => $total,
+                'total' => $total,
+            ];
+        })->values()->all();
 
         $planLabel = TransactionLabelResolver::customerPlanFamilyFromItems($row->items, $firstItem?->name);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
