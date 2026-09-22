@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Throwable;
 
 class SalesTransactionController extends Controller
@@ -189,6 +190,8 @@ class SalesTransactionController extends Controller
                     $request->ip(),
                     $request->userAgent()
                 );
+            } catch (ValidationException $exception) {
+                throw $exception;
             } catch (Throwable $exception) {
                 report($exception);
 
@@ -273,6 +276,8 @@ class SalesTransactionController extends Controller
             return response()->json([
                 'message' => 'Checkout failed because the transaction could not be saved. No transaction was created.',
             ], 500);
+        } catch (ValidationException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             report($exception);
 
@@ -308,8 +313,6 @@ class SalesTransactionController extends Controller
             'Only client accounts can continue Paynamics checkout.'
         );
 
-        $paynamics->assertCustomerProfile($customer);
-
         $validated = $request->validate([
             'invoice_id' => ['required', 'string', 'max:120'],
         ]);
@@ -321,6 +324,8 @@ class SalesTransactionController extends Controller
             'No pending Paynamics payment was found for this invoice.'
         );
 
+        $paynamics->assertCustomerProfile($customer, $transaction);
+
         try {
             $gateway = $paynamics->initiate(
                 $this->prepareReusableCheckout($transaction, (string) $transaction->notes),
@@ -328,6 +333,8 @@ class SalesTransactionController extends Controller
                 $request->ip(),
                 $request->userAgent()
             );
+        } catch (ValidationException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             report($exception);
 

@@ -130,8 +130,10 @@ class PaynamicsService
         }
     }
 
-    public function assertCustomerProfile(User $customer): void
+    public function assertCustomerProfile(User $customer, ?SalesTransaction $transaction = null): void
     {
+        $this->hydrateCustomerForCheckout($customer, $transaction);
+
         $errors = [];
 
         $required = [
@@ -144,9 +146,19 @@ class PaynamicsService
             'address_zip' => $customer->address_zip,
         ];
 
+        $requiredMessages = [
+            'fname' => 'Complete your first name to continue Paynamics checkout.',
+            'lname' => 'Complete your last name to continue Paynamics checkout.',
+            'email' => 'Complete your email to continue Paynamics checkout.',
+            'address_street' => 'Complete your billing address to continue Paynamics checkout.',
+            'address_city' => 'Complete your billing address to continue Paynamics checkout.',
+            'address_province' => 'Complete your billing address to continue Paynamics checkout.',
+            'address_zip' => 'Complete your billing address to continue Paynamics checkout.',
+        ];
+
         foreach ($required as $field => $value) {
             if (trim((string) $value) === '') {
-                $errors[$field][] = 'Complete your billing address to continue Paynamics checkout.';
+                $errors[$field][] = $requiredMessages[$field];
             }
         }
 
@@ -535,7 +547,7 @@ class PaynamicsService
         SalesTransaction $transaction,
         User $customer
     ): void {
-        $this->assertCustomerProfile($customer);
+        $this->assertCustomerProfile($customer, $transaction);
 
         $errors = [];
 
@@ -919,6 +931,260 @@ class PaynamicsService
         $separator = str_contains($url, '?') ? '&' : '?';
 
         return $url . $separator . 'request_id=' . rawurlencode($requestId);
+    }
+
+    public function hydrateCustomerForCheckout(User $customer, ?SalesTransaction $transaction = null): User
+    {
+        $billing = $this->resolveCheckoutBilling($customer, $transaction);
+        [$fname, $lname] = $this->resolveCheckoutNames($customer, $billing);
+
+        $persist = [];
+        if (trim((string) $customer->fname) === '' && $fname !== '') {
+            $persist['fname'] = $fname;
+        }
+
+        $storedLastName = User::isPlaceholderLastName($customer->lname)
+            ? ''
+            : trim((string) $customer->lname);
+        if ($storedLastName === '' && $lname !== '' && strcasecmp($lname, $fname) !== 0) {
+            $persist['lname'] = $lname;
+        }
+
+        $city = $this->billingCity($customer);
+        $fieldMap = [
+            'address_street' => trim((string) $customer->address_street),
+            'address_city' => $city,
+            'address_province' => trim((string) $customer->address_province),
+            'address_zip' => trim((string) $customer->address_zip),
+        ];
+        foreach ($fieldMap as $field => $current) {
+            $next = $this->limitPaynamicsField($field, $billing[$field] ?? '');
+            if ($current === '' && $next !== '') {
+                $persist[$field] = $next;
+            }
+        }
+
+        if (trim((string) $customer->address_city) === '' && ($persist['address_city'] ?? $city) !== '') {
+            $persist['address_city'] = $persist['address_city'] ?? $city;
+        }
+
+        if ($persist !== []) {
+            if (empty($customer->address_country) && isset($persist['address_street'])) {
+                $persist['address_country'] = 'Philippines';
+            }
+            $customer->fill($persist);
+            $customer->save();
+        }
+
+        if (trim((string) $customer->fname) === '') {
+            $customer->fname = $fname;
+        }
+        if (User::isPlaceholderLastName($customer->lname) || trim((string) $customer->lname) === '') {
+            $customer->lname = $lname !== '' ? $lname : $fname;
+        }
+        if (trim((string) $customer->address_city) === '' && $this->billingCity($customer) !== '') {
+            $customer->address_city = $this->billingCity($customer);
+        }
+
+        return $customer;
+    }
+
+    /**
+     * @return array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name: string}
+     */
+    private function resolveCheckoutBilling(User $customer, ?SalesTransaction $transaction): array
+    {
+        $billing = $this->billingFromNotes($transaction?->notes);
+        if ($this->billingIsComplete($billing) && $this->usableText($billing['contact_name']) !== '') {
+            return $billing;
+        }
+
+        $query = SalesTransaction::query()
+            ->where('customer_id', $customer->id)
+            ->whereNotNull('notes')
+            ->where(function ($inner) {
+                $inner->where('notes', 'like', '%[INVOICE_META]%')
+                    ->orWhere('notes', 'like', '%[DEAL_META]%');
+            })
+            ->latest('id')
+            ->limit(12);
+
+        if ($transaction?->id) {
+            $query->where('id', '!=', $transaction->id);
+        }
+
+        foreach ($query->get(['notes']) as $row) {
+            $billing = $this->mergeBilling($billing, $this->billingFromNotes($row->notes));
+            if ($this->billingIsComplete($billing)) {
+                break;
+            }
+        }
+
+        return $billing;
+    }
+
+    /**
+     * @param  array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name: string}  $billing
+     * @return array{0: string, 1: string}
+     */
+    private function resolveCheckoutNames(User $customer, array $billing): array
+    {
+        $fname = trim((string) $customer->fname);
+        $lname = User::isPlaceholderLastName($customer->lname)
+            ? ''
+            : trim((string) $customer->lname);
+
+        $sources = array_values(array_filter([
+            User::sanitizePersonName($customer->contact_person),
+            $this->usableText($billing['contact_name'] ?? ''),
+            User::sanitizePersonName($customer->mname),
+            trim($fname.' '.$lname),
+        ], fn ($value) => $this->usableText($value) !== ''));
+
+        foreach ($sources as $source) {
+            $parts = preg_split('/\s+/', $this->usableText($source)) ?: [];
+            if ($parts === []) {
+                continue;
+            }
+            if ($fname === '') {
+                $fname = (string) $parts[0];
+            }
+            if ($lname === '' && count($parts) > 1) {
+                $rest = trim(implode(' ', array_slice($parts, 1)));
+                if ($rest !== '' && ! User::isPlaceholderLastName($rest)) {
+                    $lname = $rest;
+                }
+            }
+            if ($fname !== '' && $lname !== '') {
+                break;
+            }
+        }
+
+        if ($lname === '') {
+            $emailLocal = preg_replace('/[^A-Za-z]+/', ' ', Str::before((string) $customer->email, '@')) ?? '';
+            $emailParts = preg_split('/\s+/', trim($emailLocal)) ?: [];
+            if (count($emailParts) > 1) {
+                $lname = (string) end($emailParts);
+            }
+        }
+
+        if ($lname === '') {
+            $lname = $fname;
+        }
+
+        return [
+            $this->limitPaynamicsField('fname', $fname),
+            $this->limitPaynamicsField('lname', $lname),
+        ];
+    }
+
+    /**
+     * @return array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name: string}
+     */
+    private function billingFromNotes(?string $notes): array
+    {
+        $empty = [
+            'address_street' => '',
+            'address_city' => '',
+            'address_province' => '',
+            'address_zip' => '',
+            'contact_name' => '',
+        ];
+        $meta = $this->prefixedJson($notes, '[INVOICE_META]');
+        if ($meta === []) {
+            $meta = $this->prefixedJson($notes, '[DEAL_META]');
+        }
+        if ($meta === []) {
+            return $empty;
+        }
+
+        return [
+            'address_street' => $this->usableText($meta['billingStreet'] ?? $meta['address_street'] ?? null),
+            'address_city' => $this->usableText($meta['billingCity'] ?? $meta['address_city'] ?? null),
+            'address_province' => $this->usableText(
+                $meta['billingState'] ?? $meta['billingProvince'] ?? $meta['address_province'] ?? null
+            ),
+            'address_zip' => $this->usableText($meta['billingCode'] ?? $meta['billingZip'] ?? $meta['address_zip'] ?? null),
+            'contact_name' => $this->usableText($meta['contactName'] ?? $meta['contact_name'] ?? null),
+        ];
+    }
+
+    /**
+     * @param  array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name: string}  $current
+     * @param  array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name: string}  $incoming
+     * @return array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name: string}
+     */
+    private function mergeBilling(array $current, array $incoming): array
+    {
+        foreach ($current as $key => $value) {
+            if ($this->usableText($value) === '') {
+                $current[$key] = $incoming[$key] ?? '';
+            }
+        }
+
+        return $current;
+    }
+
+    /**
+     * @param  array{address_street: string, address_city: string, address_province: string, address_zip: string, contact_name?: string}  $billing
+     */
+    private function billingIsComplete(array $billing): bool
+    {
+        return $this->usableText($billing['address_street'] ?? '') !== ''
+            && $this->usableText($billing['address_city'] ?? '') !== ''
+            && $this->usableText($billing['address_province'] ?? '') !== ''
+            && $this->usableText($billing['address_zip'] ?? '') !== '';
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function prefixedJson(?string $notes, string $prefix): array
+    {
+        $text = (string) $notes;
+        $marker = strpos($text, $prefix);
+        if ($marker === false) {
+            return [];
+        }
+
+        $jsonLine = strtok(substr($text, $marker + strlen($prefix)), "\n") ?: '';
+        $jsonLine = trim($jsonLine);
+        if ($jsonLine === '' || ! str_starts_with($jsonLine, '{')) {
+            return [];
+        }
+
+        $decoded = json_decode($jsonLine, true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function usableText(mixed $value): string
+    {
+        $text = trim((string) ($value ?? ''));
+        if ($text === '' || $text === '—' || $text === '-' || strcasecmp($text, 'n/a') === 0) {
+            return '';
+        }
+
+        return $text;
+    }
+
+    private function limitPaynamicsField(string $field, string $value): string
+    {
+        $maximums = [
+            'fname' => 50,
+            'lname' => 50,
+            'address_street' => 100,
+            'address_city' => 30,
+            'address_province' => 30,
+            'address_zip' => 12,
+        ];
+        $maximum = $maximums[$field] ?? 100;
+        $value = trim($value);
+        if (mb_strlen($value) <= $maximum) {
+            return $value;
+        }
+
+        return trim(mb_substr($value, 0, $maximum));
     }
 
     private function billingCity(User $customer): string
