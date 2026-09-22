@@ -8,6 +8,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Password;
+use App\Support\PhMobile;
 
 
 class AccountController extends Controller
@@ -57,7 +58,7 @@ class AccountController extends Controller
         $request->validate([
             'fname'  => 'required|string|max:255',
             'lname'  => 'nullable|string|max:255',
-            'mobile' => 'nullable|string|max:60',
+            'mobile' => PhMobile::rule(false),
             'birth_date' => 'nullable|date',
             'address_street' => 'nullable|string|max:255',
             'address_city' => 'nullable|string|max:120',
@@ -92,7 +93,7 @@ class AccountController extends Controller
         }
         $user->lname = $lname;
         if ($request->exists('mobile')) {
-            $user->mobile = $request->mobile;
+            $user->mobile = PhMobile::normalize($request->mobile);
         }
         if ($request->exists('birth_date')) {
             $user->birth_date = $request->birth_date;

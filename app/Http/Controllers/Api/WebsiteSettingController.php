@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Page;
 use App\Models\Setting;
 use App\Models\SocialMediaAccount;
+use App\Support\PhMobile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -113,18 +114,18 @@ class WebsiteSettingController extends Controller
     {
         $request->validate([
             'company_address' => 'required',
-            'mobile_no' => 'required',
+            'mobile_no' => PhMobile::rule(true),
             'tel_no' => 'required',
             'email' => 'required|email',
         ]);
 
-        $this->setting()->update($request->only([
-            'company_address',
-            'mobile_no',
-            'fax_no',
-            'tel_no',
-            'email',
-        ]));
+        $this->setting()->update([
+            'company_address' => $request->input('company_address'),
+            'mobile_no' => PhMobile::normalize($request->input('mobile_no')),
+            'fax_no' => $request->input('fax_no'),
+            'tel_no' => $request->input('tel_no'),
+            'email' => $request->input('email'),
+        ]);
 
         return response()->json(['message' => 'Contact settings updated']);
     }

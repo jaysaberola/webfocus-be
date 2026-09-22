@@ -10,6 +10,7 @@ use Illuminate\Validation\ValidationException;
 use App\Http\Resources\Auth\LoginResource;
 use App\Models\User;
 use App\Services\ClientOwnerRotator;
+use App\Support\PhMobile;
 use Spatie\Permission\Models\Role;
 
 class AuthController extends Controller
@@ -57,7 +58,7 @@ class AuthController extends Controller
             'lname' => ['nullable', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],
-            'mobile' => ['nullable', 'string', 'max:60'],
+            'mobile' => PhMobile::rule(true),
             'company' => ['nullable', 'string', 'max:255'],
         ]);
 
@@ -78,7 +79,7 @@ class AuthController extends Controller
             'lname' => $lname,
             'mname' => $company !== '' ? $company : null,
             'email' => $validated['email'],
-            'mobile' => $validated['mobile'] ?? null,
+            'mobile' => PhMobile::normalize($validated['mobile'] ?? null),
             'contact_person' => $fname,
             'password' => Hash::make($validated['password']),
             'is_active' => true,

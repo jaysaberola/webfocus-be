@@ -13,6 +13,7 @@ use App\Models\ArticleCategory;
 use App\Mail\ContactMessageMail;
 use App\Http\Controllers\Controller;
 use App\Support\RecaptchaVerifier;
+use App\Support\PhMobile;
 use Illuminate\Support\Facades\Mail;
 
 class PublicPageController extends Controller
@@ -280,7 +281,7 @@ class PublicPageController extends Controller
             'first_name'          => 'required|string|max:100',
             'last_name'           => 'required|string|max:100',
             'email'               => 'required|email',
-            'contact_number'      => 'required|string|max:30',
+            'contact_number'      => PhMobile::rule(true),
             'message'             => 'required|string|max:2000',
             'preferred_services'  => 'nullable|array',
             'preferred_services.*'=> 'string|max:100',
@@ -294,6 +295,7 @@ class PublicPageController extends Controller
         }
 
         unset($data['recaptcha_token']);
+        $data['contact_number'] = PhMobile::normalize($data['contact_number']) ?? $data['contact_number'];
 
         Mail::to(config('mail.from.address'))
             ->send(new ContactMessageMail($data));

@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\JobOrder;
 use App\Models\User;
+use App\Support\PhMobile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
@@ -127,7 +128,7 @@ class JobOrderController extends Controller
             'customer_type' => ['nullable', 'string', 'max:20'],
             'customer_name' => ['nullable', 'string', 'max:150'],
             'customer_email' => ['nullable', 'email', 'max:150'],
-            'customer_contact' => ['nullable', 'string', 'max:60'],
+            'customer_contact' => PhMobile::rule(false),
             'source' => ['nullable', 'string', 'max:120'],
             'category' => ['nullable', 'string', 'max:60'],
             'status' => ['nullable', 'string', 'max:60'],
@@ -177,7 +178,8 @@ class JobOrderController extends Controller
             'customer_type' => $payload['customer_type'] ?? 'existing',
             'customer_name' => $payload['customer_name'] ?? null,
             'customer_email' => $payload['customer_email'] ?? null,
-            'customer_contact' => $payload['customer_contact'] ?? null,
+            'customer_contact' => PhMobile::normalize($payload['customer_contact'] ?? null)
+                ?? ($payload['customer_contact'] ?? null),
             'source' => $payload['source'] ?? null,
             'category' => $payload['category'] ?? 'Order',
             'status' => $payload['status'] ?? 'Open Date',

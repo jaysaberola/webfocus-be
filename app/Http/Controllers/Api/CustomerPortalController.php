@@ -19,6 +19,7 @@ use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
 use App\Support\WebDesignQuotation;
+use App\Support\PhMobile;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\CustomerPortalNotificationSync;
@@ -820,7 +821,7 @@ class CustomerPortalController extends Controller
         $validated = $request->validate([
             'fname' => ['required', 'string', 'max:255'],
             'lname' => ['nullable', 'string', 'max:255'],
-            'mobile' => ['nullable', 'string', 'max:60'],
+            'mobile' => PhMobile::rule(false),
             'mname' => ['nullable', 'string', 'max:255'],
             'address_country' => ['nullable', 'string', 'max:255'],
             'address_region' => ['nullable', 'string', 'max:255'],
@@ -842,7 +843,7 @@ class CustomerPortalController extends Controller
         $requestedPayload = [
             'fname' => $validated['fname'],
             'lname' => trim((string) ($validated['lname'] ?? '')),
-            'mobile' => $validated['mobile'] ?? null,
+            'mobile' => PhMobile::normalize($validated['mobile'] ?? null),
             'mname' => $validated['mname'] ?? null,
             'address_country' => $validated['address_country'] ?? null,
             'address_region' => $validated['address_region'] ?? null,

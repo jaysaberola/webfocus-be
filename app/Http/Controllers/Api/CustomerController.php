@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\CustomerPortalProvisioner;
 use App\Support\ServiceCatalogLabelResolver;
 use App\Support\StorageUrl;
+use App\Support\PhMobile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -161,9 +162,7 @@ class CustomerController extends Controller
                 'lname' => $lname,
                 'mname' => $validated['company'],
                 'email' => $validated['email'],
-                'mobile' => isset($validated['mobile']) && $validated['mobile'] !== ''
-                    ? '+63' . $validated['mobile']
-                    : null,
+                'mobile' => PhMobile::normalize($validated['mobile'] ?? null),
                 'phone' => $validated['phone'] ?? null,
                 'address_street' => $validated['address_street'] ?? null,
                 'avatar' => $avatarPath,
@@ -448,7 +447,7 @@ class CustomerController extends Controller
                 'mname' => $validated['company'] ?? $customer->mname,
                 'email' => $validated['email'],
                 'mobile' => array_key_exists('mobile', $validated) && $validated['mobile'] !== null && $validated['mobile'] !== ''
-                    ? '+63' . $validated['mobile']
+                    ? PhMobile::normalize($validated['mobile'])
                     : $customer->mobile,
                 'phone' => $validated['phone'] ?? $customer->phone,
                 'address_street' => $validated['address_street'] ?? $customer->address_street,
@@ -523,13 +522,8 @@ class CustomerController extends Controller
         }
 
         if ($request->has('mobile')) {
-            $digits = preg_replace('/\D+/', '', (string) $request->input('mobile'));
-            if (str_starts_with((string) $digits, '63') && strlen((string) $digits) >= 11) {
-                $digits = substr((string) $digits, 2, 9);
-            } elseif (strlen((string) $digits) > 9) {
-                $digits = substr((string) $digits, -9);
-            }
-            $request->merge(['mobile' => $digits ?: null]);
+            $text = trim((string) $request->input('mobile'));
+            $request->merge(['mobile' => $text === '' ? null : $text]);
         }
     }
 
@@ -612,7 +606,7 @@ class CustomerController extends Controller
             'shipping_region' => ['nullable', 'string', 'max:255'],
             'shipping_zip' => ['nullable', 'string', 'max:50'],
             'shipping_country' => ['nullable', 'string', 'max:255'],
-            'mobile' => ['nullable', 'string', 'regex:/^\d{9}$/'],
+            'mobile' => PhMobile::rule(false),
             'phone' => ['nullable', 'string', 'max:50'],
             'owner_id' => ['nullable', 'integer', 'exists:users,id'],
             'industry' => ['nullable', 'string', 'max:255'],
