@@ -84,15 +84,16 @@ class DealMeta
 
     public static function domainCost(?string $notes, ?string $domainType = null): float
     {
-        $meta = self::parse($notes);
-        $cost = (float) ($meta['domainRegistrationCost'] ?? 0);
-        if ($cost > 0) {
-            return round($cost, 2);
+        $type = $domainType ?: self::domainType($notes);
+        $catalog = self::FALLBACK_PRICES[$type] ?? 0.0;
+        if ($catalog > 0) {
+            return round($catalog, 2);
         }
 
-        $type = $domainType ?: self::domainType($notes);
+        $meta = self::parse($notes);
+        $cost = (float) ($meta['domainRegistrationCost'] ?? 0);
 
-        return self::FALLBACK_PRICES[$type] ?? 0.0;
+        return $cost > 0 ? round($cost, 2) : 0.0;
     }
 
     /**
