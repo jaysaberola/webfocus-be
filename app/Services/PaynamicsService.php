@@ -6,6 +6,7 @@ use App\Models\PaynamicsPaymentReference;
 use App\Models\SalesTransaction;
 use App\Models\User;
 use App\Support\RelatedPaymentSync;
+use App\Support\WebDesignQuotation;
 use Illuminate\Http\Client\Response;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
@@ -372,7 +373,7 @@ class PaynamicsService
         $merchantId = (string) config('paynamics.merchant_id');
         $merchantKey = (string) config('paynamics.merchant_key');
         $currency = (string) config('paynamics.currency', 'PHP');
-        $amount = $this->money($transaction->grand_total);
+        $amount = $this->money(WebDesignQuotation::displayAmount($transaction));
 
         $notificationUrl = $this->notificationUrl();
         $responseUrl = $this->responseUrl($requestId);
@@ -542,7 +543,7 @@ class PaynamicsService
             $errors['items'][] = 'At least one order item is required.';
         }
 
-        if ((float) $transaction->grand_total <= 0) {
+        if ((float) WebDesignQuotation::displayAmount($transaction) <= 0) {
             $errors['grand_total'][] = 'The Paynamics amount must be greater than zero.';
         }
 

@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use App\Models\SalesTransaction;
+use App\Support\DealMeta;
 
 class WebDesignQuotation
 {
@@ -75,7 +76,24 @@ class WebDesignQuotation
 
     public static function displayAmount(SalesTransaction $row): float
     {
-        return self::isPendingQuotation($row) ? 0.0 : (float) $row->grand_total;
+        if (self::isPendingQuotation($row)) {
+            return 0.0;
+        }
+
+        $stored = (float) $row->grand_total;
+        $fromItems = 0.0;
+        if ($row->relationLoaded('items') && $row->items && $row->items->isNotEmpty()) {
+            $fromItems = (float) $row->items->sum(function ($item) {
+                $total = (float) ($item->total_price ?? 0);
+                if ($total > 0) {
+                    return $total;
+                }
+
+                return (float) ($item->price ?? 0) * max(1, (float) ($item->quantity ?? 1));
+            });
+        }
+
+        return round(max($stored, $fromItems + DealMeta::missingAmount($row)), 2);
     }
 
     public static function appendMarker(?string $notes, string $marker): string

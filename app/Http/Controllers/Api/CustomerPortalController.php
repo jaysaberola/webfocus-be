@@ -14,6 +14,7 @@ use App\Models\SalesTransactionItem;
 use App\Models\SalesTransactionProposal;
 use App\Models\Service;
 use App\Models\User;
+use App\Support\DealMeta;
 use App\Support\PendingCheckoutGuard;
 use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
@@ -1229,17 +1230,23 @@ class CustomerPortalController extends Controller
         })->values()->all();
 
         $planLabel = TransactionLabelResolver::customerPlanFamilyFromItems($row->items, $firstItem?->name);
+        $domainLine = DealMeta::mappedLine($row);
+        if ($domainLine) {
+            $items[] = $domainLine;
+        }
+        $amount = WebDesignQuotation::displayAmount($row);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         $canCheckout = $status === CustomerPortalProvisioner::STATUS_PENDING
-            && (float) $row->grand_total > 0
+            && $amount > 0
             && ! WebDesignQuotation::isPendingQuotation($row);
         if ($canCheckout) {
             $status = 'Pending Payment';
         }
-        $domain = $row->items
-            ->pluck('name')
-            ->first(fn ($name) => TransactionLabelResolver::looksLikeDomain($name));
+        $domain = DealMeta::domainName($row->notes)
+            ?: $row->items
+                ->pluck('name')
+                ->first(fn ($name) => TransactionLabelResolver::looksLikeDomain($name));
 
         return [
             'id' => $row->transaction_no,
@@ -1247,12 +1254,12 @@ class CustomerPortalController extends Controller
             'invoiceId' => $this->invoiceId($row),
             'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
             'plan' => $planLabel,
-            'domain' => $domain,
+            'domain' => $domain ?: null,
             'date' => TransactionLabelResolver::issuedDateFrom($row->transacted_at),
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
-            'total' => WebDesignQuotation::displayAmount($row),
+            'total' => $amount,
             'status' => $status,
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
             'gateway' => $this->extractPaymentMethod($row),
