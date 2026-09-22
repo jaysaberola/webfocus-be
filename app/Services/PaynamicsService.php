@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\PaynamicsPaymentReference;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Support\DealMeta;
 use App\Support\RelatedPaymentSync;
 use App\Support\WebDesignQuotation;
 use Illuminate\Http\Client\Response;
@@ -121,11 +122,6 @@ class PaynamicsService
                 'failed_at' => now(),
             ]);
 
-            $transaction->update([
-                'payment_status' => 'failed',
-                'order_status' => 'payment_failed',
-            ]);
-
             throw $exception;
         }
     }
@@ -159,26 +155,6 @@ class PaynamicsService
         foreach ($required as $field => $value) {
             if (trim((string) $value) === '') {
                 $errors[$field][] = $requiredMessages[$field];
-            }
-        }
-
-        $maximumLengths = [
-            'fname' => [$customer->fname, 50],
-            'lname' => [$customer->lname, 50],
-            'mname' => [$customer->mname, 32],
-            'email' => [$customer->email, 100],
-            'phone' => [$customer->phone, 32],
-            'mobile' => [$customer->mobile, 32],
-            'address_street' => [$customer->address_street, 100],
-            'address_city' => [$this->billingCity($customer), 30],
-            'address_province' => [$customer->address_province, 30],
-            'address_zip' => [$customer->address_zip, 12],
-        ];
-
-        foreach ($maximumLengths as $field => [$value, $maximum]) {
-            if (mb_strlen((string) ($value ?? '')) > $maximum) {
-                $errors[$field][] =
-                    "This profile field must not exceed {$maximum} characters for Paynamics.";
             }
         }
 
@@ -401,6 +377,14 @@ class PaynamicsService
 
         $phone = $this->normalizePhone($customer->phone);
         $mobile = $this->normalizePhone($customer->mobile);
+        $fname = $this->limitPaynamicsField('fname', (string) $customer->fname);
+        $lname = $this->limitPaynamicsField('lname', (string) $customer->lname);
+        $mname = $this->limitPaynamicsField('mname', (string) ($customer->mname ?? ''));
+        $email = $this->limitPaynamicsField('email', (string) $customer->email);
+        $street = $this->limitPaynamicsField('address_street', (string) $customer->address_street);
+        $city = $this->limitPaynamicsField('address_city', $this->billingCity($customer));
+        $province = $this->limitPaynamicsField('address_province', (string) $customer->address_province);
+        $zip = $this->limitPaynamicsField('address_zip', (string) $customer->address_zip);
 
         $transactionSignature = hash(
             'sha512',
@@ -419,10 +403,10 @@ class PaynamicsService
 
         $customerSignature = hash(
             'sha512',
-            (string) $customer->fname .
-            (string) $customer->lname .
-            (string) ($customer->mname ?? '') .
-            (string) $customer->email .
+            $fname .
+            $lname .
+            $mname .
+            $email .
             $phone .
             $mobile .
             $dob .
@@ -430,10 +414,10 @@ class PaynamicsService
         );
 
         $customerInfo = [
-            'fname' => (string) $customer->fname,
-            'lname' => (string) $customer->lname,
-            'mname' => (string) ($customer->mname ?? ''),
-            'email' => (string) $customer->email,
+            'fname' => $fname,
+            'lname' => $lname,
+            'mname' => $mname,
+            'email' => $email,
             'dob' => $dob,
             'signature' => $customerSignature,
         ];
@@ -445,6 +429,8 @@ class PaynamicsService
         if ($mobile !== '') {
             $customerInfo['mobile'] = $mobile;
         }
+
+        $orders = $this->paynamicsOrderLines($transaction, $amount);
 
         return [
             'transaction' => [
@@ -472,32 +458,18 @@ class PaynamicsService
             ],
             'customer_info' => $customerInfo,
             'billing_info' => [
-                'billing_address1' => (string) $customer->address_street,
+                'billing_address1' => $street,
                 'billing_address2' => '',
-                'billing_city' => $this->billingCity($customer),
-                'billing_state' => (string) $customer->address_province,
+                'billing_city' => $city,
+                'billing_state' => $province,
                 'billing_country' => 'PH',
-                'billing_zip' => (string) $customer->address_zip,
+                'billing_zip' => $zip,
             ],
             'order_details' => [
-                'orders' => $transaction->items
-                    ->map(function ($item) {
-                        return [
-                            'itemname' => Str::limit(
-                                (string) $item->name,
-                                100,
-                                ''
-                            ),
-                            'quantity' => $this->quantity($item->quantity),
-                            'unitprice' => $this->money($item->price),
-                            'totalprice' => $this->money($item->total_price),
-                        ];
-                    })
-                    ->values()
-                    ->all(),
-                'subtotalprice' => $this->money($transaction->subtotal),
-                'shippingprice' => $this->money($transaction->shipping_total),
-                'discountamount' => $this->money($transaction->discount_total),
+                'orders' => $orders['lines'],
+                'subtotalprice' => $orders['subtotal'],
+                'shippingprice' => $this->money(0),
+                'discountamount' => $this->money(0),
                 'totalorderamount' => $amount,
             ],
             'contextual_info' => [
@@ -530,6 +502,11 @@ class PaynamicsService
         // 00639171234567 → 639171234567
         if (str_starts_with($digits, '0063')) {
             $digits = substr($digits, 2);
+        }
+
+        // +639171234567 / 639171234567 → 09171234567
+        if (strlen($digits) === 12 && str_starts_with($digits, '63')) {
+            $digits = '0' . substr($digits, 2);
         }
 
         // 9171234567 → 09171234567
@@ -892,9 +869,13 @@ class PaynamicsService
         ])->filter(fn($value) => trim((string) $value) === '')->keys()->all();
 
         if ($missing) {
-            throw new RuntimeException(
-                'Missing Paynamics configuration: ' . implode(', ', $missing)
-            );
+            throw ValidationException::withMessages([
+                'paynamics' => [
+                    app()->isLocal() || config('app.debug')
+                        ? 'Paynamics merchant credentials are missing in the backend .env (PAYNAMICS_MERCHANT_ID, PAYNAMICS_MERCHANT_KEY, PAYNAMICS_BASIC_AUTH_USERNAME, PAYNAMICS_BASIC_AUTH_PASSWORD).'
+                        : 'Paynamics is temporarily unavailable. Please try again later or contact support.',
+                ],
+            ]);
         }
     }
 
@@ -946,7 +927,7 @@ class PaynamicsService
         $storedLastName = User::isPlaceholderLastName($customer->lname)
             ? ''
             : trim((string) $customer->lname);
-        if ($storedLastName === '' && $lname !== '' && strcasecmp($lname, $fname) !== 0) {
+        if ($storedLastName === '' && $lname !== '') {
             $persist['lname'] = $lname;
         }
 
@@ -1029,48 +1010,13 @@ class PaynamicsService
      */
     private function resolveCheckoutNames(User $customer, array $billing): array
     {
-        $fname = trim((string) $customer->fname);
-        $lname = User::isPlaceholderLastName($customer->lname)
-            ? ''
-            : trim((string) $customer->lname);
-
-        $sources = array_values(array_filter([
-            User::sanitizePersonName($customer->contact_person),
-            $this->usableText($billing['contact_name'] ?? ''),
-            User::sanitizePersonName($customer->mname),
-            trim($fname.' '.$lname),
-        ], fn ($value) => $this->usableText($value) !== ''));
-
-        foreach ($sources as $source) {
-            $parts = preg_split('/\s+/', $this->usableText($source)) ?: [];
-            if ($parts === []) {
-                continue;
-            }
-            if ($fname === '') {
-                $fname = (string) $parts[0];
-            }
-            if ($lname === '' && count($parts) > 1) {
-                $rest = trim(implode(' ', array_slice($parts, 1)));
-                if ($rest !== '' && ! User::isPlaceholderLastName($rest)) {
-                    $lname = $rest;
-                }
-            }
-            if ($fname !== '' && $lname !== '') {
-                break;
-            }
-        }
-
-        if ($lname === '') {
-            $emailLocal = preg_replace('/[^A-Za-z]+/', ' ', Str::before((string) $customer->email, '@')) ?? '';
-            $emailParts = preg_split('/\s+/', trim($emailLocal)) ?: [];
-            if (count($emailParts) > 1) {
-                $lname = (string) end($emailParts);
-            }
-        }
-
-        if ($lname === '') {
-            $lname = $fname;
-        }
+        [$fname, $lname] = User::paynamicsPersonName(
+            $customer->fname,
+            $customer->lname,
+            $customer->mname,
+            $customer->contact_person ?: ($billing['contact_name'] ?? ''),
+            $customer->email
+        );
 
         return [
             $this->limitPaynamicsField('fname', $fname),
@@ -1168,11 +1114,67 @@ class PaynamicsService
         return $text;
     }
 
+    /**
+     * @return array{lines: array<int, array<string, string>>, subtotal: string}
+     */
+    private function paynamicsOrderLines(SalesTransaction $transaction, string $amount): array
+    {
+        $lines = $transaction->items
+            ->map(function ($item) {
+                $quantity = max(1, (float) $item->quantity);
+                $total = (float) ($item->total_price ?? 0);
+                if ($total <= 0) {
+                    $total = (float) ($item->price ?? 0) * $quantity;
+                }
+
+                return [
+                    'itemname' => Str::limit((string) $item->name, 100, ''),
+                    'quantity' => $this->quantity($item->quantity),
+                    'unitprice' => $this->money($item->price),
+                    'totalprice' => $this->money($total),
+                ];
+            })
+            ->values()
+            ->all();
+
+        $domain = DealMeta::mappedLine($transaction);
+        if ($domain) {
+            $lines[] = [
+                'itemname' => Str::limit((string) $domain['name'], 100, ''),
+                'quantity' => '1',
+                'unitprice' => $this->money($domain['unitPrice'] ?? $domain['price'] ?? 0),
+                'totalprice' => $this->money($domain['total'] ?? $domain['price'] ?? 0),
+            ];
+        }
+
+        $sum = array_reduce(
+            $lines,
+            fn (float $carry, array $line) => $carry + (float) $line['totalprice'],
+            0.0
+        );
+        $target = (float) $amount;
+        if (abs($sum - $target) > 0.009 && $lines !== []) {
+            $last = count($lines) - 1;
+            $adjustment = round($target - ($sum - (float) $lines[$last]['totalprice']), 2);
+            $lines[$last]['totalprice'] = $this->money(max(0, $adjustment));
+            $qty = max(1, (float) $lines[$last]['quantity']);
+            $lines[$last]['unitprice'] = $this->money(max(0, $adjustment / $qty));
+            $sum = $target;
+        }
+
+        return [
+            'lines' => $lines,
+            'subtotal' => $this->money($sum),
+        ];
+    }
+
     private function limitPaynamicsField(string $field, string $value): string
     {
         $maximums = [
             'fname' => 50,
             'lname' => 50,
+            'mname' => 32,
+            'email' => 100,
             'address_street' => 100,
             'address_city' => 30,
             'address_province' => 30,

@@ -73,6 +73,7 @@ class AuthController extends Controller
         if (User::isPlaceholderLastName($lname)) {
             $lname = '';
         }
+        [$fname, $lname] = User::paynamicsPersonName($fname, $lname, $company, $fname, $validated['email']);
 
         $user = User::create([
             'fname' => $fname,
@@ -80,7 +81,8 @@ class AuthController extends Controller
             'mname' => $company !== '' ? $company : null,
             'email' => $validated['email'],
             'mobile' => PhMobile::normalize($validated['mobile'] ?? null),
-            'contact_person' => $fname,
+            'contact_person' => trim((string) $validated['fname']) ?: $fname,
+            'address_country' => 'Philippines',
             'password' => Hash::make($validated['password']),
             'is_active' => true,
         ]);

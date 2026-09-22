@@ -339,7 +339,9 @@ class SalesTransactionController extends Controller
             report($exception);
 
             $payload = [
-                'message' => 'Paynamics could not be opened for this pending invoice. Try again.',
+                'message' => trim($exception->getMessage()) !== ''
+                    ? $exception->getMessage()
+                    : 'Paynamics could not be opened for this pending invoice. Try again.',
                 'data' => [
                     'invoice_id' => PendingCheckoutGuard::invoiceId($transaction),
                     'transaction_no' => $transaction->transaction_no,
