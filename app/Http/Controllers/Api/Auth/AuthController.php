@@ -68,12 +68,9 @@ class AuthController extends Controller
         );
 
         $fname = trim((string) $validated['fname']);
-        $lname = trim((string) ($validated['lname'] ?? ''));
+        $lname = User::usableLastName($validated['lname'] ?? '', $validated['company'] ?? '');
         $company = trim((string) ($validated['company'] ?? ''));
-        if (User::isPlaceholderLastName($lname)) {
-            $lname = '';
-        }
-        [$fname, $lname] = User::paynamicsPersonName($fname, $lname, $company, $fname, $validated['email']);
+        [$fname, $lname] = User::paynamicsPersonName($fname, $lname, $company);
 
         $user = User::create([
             'fname' => $fname,

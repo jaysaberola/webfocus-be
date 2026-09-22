@@ -130,11 +130,17 @@ class PaynamicsService
     {
         $this->hydrateCustomerForCheckout($customer, $transaction);
 
+        [$fname, $lname] = User::paynamicsPersonName(
+            $customer->fname,
+            $customer->lname,
+            $customer->mname
+        );
+
         $errors = [];
 
         $required = [
-            'fname' => $customer->fname,
-            'lname' => $customer->lname,
+            'fname' => $fname,
+            'lname' => $lname,
             'email' => $customer->email,
             'address_street' => $customer->address_street,
             'address_city' => $this->billingCity($customer),
@@ -920,14 +926,15 @@ class PaynamicsService
         [$fname, $lname] = $this->resolveCheckoutNames($customer, $billing);
 
         $persist = [];
-        if (trim((string) $customer->fname) === '' && $fname !== '') {
+        if ($fname !== '' && trim((string) $customer->fname) !== $fname) {
             $persist['fname'] = $fname;
         }
 
-        $storedLastName = User::isPlaceholderLastName($customer->lname)
-            ? ''
-            : trim((string) $customer->lname);
-        if ($storedLastName === '' && $lname !== '') {
+        $storedLastName = User::usableLastName($customer->lname, $customer->mname);
+        if ($storedLastName === '' && trim((string) $customer->lname) !== '') {
+            $persist['lname'] = '';
+        }
+        if ($storedLastName === '' && User::usableLastName($lname, $customer->mname) !== '') {
             $persist['lname'] = $lname;
         }
 
@@ -957,12 +964,10 @@ class PaynamicsService
             $customer->save();
         }
 
-        if (trim((string) $customer->fname) === '') {
+        if ($fname !== '') {
             $customer->fname = $fname;
         }
-        if (User::isPlaceholderLastName($customer->lname) || trim((string) $customer->lname) === '') {
-            $customer->lname = $lname !== '' ? $lname : $fname;
-        }
+        $customer->lname = User::usableLastName($customer->lname, $customer->mname);
         if (trim((string) $customer->address_city) === '' && $this->billingCity($customer) !== '') {
             $customer->address_city = $this->billingCity($customer);
         }

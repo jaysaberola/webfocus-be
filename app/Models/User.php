@@ -85,6 +85,30 @@ class User extends Authenticatable implements AuditableContract
         return (bool) preg_match('/^(customer|user)$/i', trim((string) $lname));
     }
 
+    public static function usableLastName(?string $lname, ?string $company = null): string
+    {
+        $value = self::isPlaceholderLastName($lname) ? '' : trim((string) $lname);
+        if ($value === '') {
+            return '';
+        }
+
+        $companyName = self::sanitizePersonName($company);
+        if ($companyName !== '') {
+            if (strcasecmp($value, $companyName) === 0) {
+                return '';
+            }
+            if (str_ends_with(strtolower($companyName), strtolower($value))) {
+                return '';
+            }
+        }
+
+        if (preg_match('/\b(inc|incorporated|llc|corp|corporation|ltd|limited)\b/i', $value)) {
+            return '';
+        }
+
+        return $value;
+    }
+
     public static function sanitizePersonName(?string $name): string
     {
         $value = trim(preg_replace('/\s+/', ' ', (string) $name) ?? '');
@@ -94,9 +118,9 @@ class User extends Authenticatable implements AuditableContract
     }
 
     /**
-     * Paynamics requires both first and last name. Public signup only collects
-     * a username plus company, so derive a stable pair without using the
-     * stripped "Customer"/"User" placeholders.
+     * Split a real person name into first/last. Never invent a last name from
+     * the company (mname) or duplicate the first name — Paynamics requires the
+     * customer to enter both names when they are missing.
      *
      * @return array{0: string, 1: string}
      */
@@ -108,56 +132,31 @@ class User extends Authenticatable implements AuditableContract
         ?string $email = null
     ): array {
         $fname = trim((string) $fname);
-        $lname = self::isPlaceholderLastName($lname) ? '' : trim((string) $lname);
-        $companyName = self::sanitizePersonName($company);
-        $contactName = self::sanitizePersonName($contact);
+        $lname = self::usableLastName($lname, $company);
 
         $fnameParts = preg_split('/\s+/', $fname) ?: [];
         $fnameParts = array_values(array_filter($fnameParts));
         if ($lname === '' && count($fnameParts) > 1) {
-            $fname = $fnameParts[0];
-            $lname = implode(' ', array_slice($fnameParts, 1));
-        }
-
-        $companyParts = preg_split('/\s+/', $companyName) ?: [];
-        $companyParts = array_values(array_filter($companyParts));
-        if (($fname === '' || $lname === '') && count($companyParts) > 1) {
-            if ($fname === '') {
-                $fname = $companyParts[0];
-            }
-            if ($lname === '') {
-                $lname = implode(' ', array_slice($companyParts, 1));
+            $rest = implode(' ', array_slice($fnameParts, 1));
+            if (self::usableLastName($rest, $company) !== '') {
+                $fname = $fnameParts[0];
+                $lname = $rest;
+            } else {
+                $fname = $fnameParts[0];
             }
         }
 
+        $contactName = self::sanitizePersonName($contact);
         $contactParts = preg_split('/\s+/', $contactName) ?: [];
         $contactParts = array_values(array_filter($contactParts));
         if (($fname === '' || $lname === '') && count($contactParts) > 1) {
+            $contactLast = self::usableLastName(implode(' ', array_slice($contactParts, 1)), $company);
             if ($fname === '') {
                 $fname = $contactParts[0];
             }
-            if ($lname === '') {
-                $lname = implode(' ', array_slice($contactParts, 1));
+            if ($lname === '' && $contactLast !== '') {
+                $lname = $contactLast;
             }
-        }
-
-        if ($fname === '') {
-            $local = strstr((string) $email, '@', true) ?: (string) $email;
-            $local = trim((string) preg_replace('/[^A-Za-z]+/', ' ', $local));
-            $emailParts = array_values(array_filter(preg_split('/\s+/', $local) ?: []));
-            if ($emailParts !== []) {
-                $fname = $emailParts[0];
-                if ($lname === '' && count($emailParts) > 1) {
-                    $lname = implode(' ', array_slice($emailParts, 1));
-                }
-            }
-        }
-
-        if ($lname === '') {
-            $lname = $fname;
-        }
-        if ($fname === '') {
-            $fname = $lname;
         }
 
         return [$fname, $lname];
@@ -165,7 +164,7 @@ class User extends Authenticatable implements AuditableContract
 
     public function getFullNameAttribute(): string
     {
-        $last = self::isPlaceholderLastName($this->lname) ? '' : trim((string) ($this->lname ?? ''));
+        $last = self::usableLastName($this->lname, $this->mname);
 
         // mname is company in this CRM — keep it out of the person display name.
         return trim(preg_replace('/\s+/', ' ', trim((string) ($this->fname ?? '')) . ' ' . $last) ?? '');

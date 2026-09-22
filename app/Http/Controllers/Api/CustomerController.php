@@ -90,7 +90,7 @@ class CustomerController extends Controller
                     'representative' => $customer->full_name,
                     'company' => $customer->mname,
                     'fname' => $customer->fname,
-                    'lname' => User::isPlaceholderLastName($customer->lname) ? '' : $customer->lname,
+                    'lname' => User::usableLastName($customer->lname, $customer->mname),
                     'email' => $customer->email,
                     'type' => 'Customer',
                     'role' => $customer->getRoleNames()->first(),
@@ -373,7 +373,7 @@ class CustomerController extends Controller
             'data' => array_merge([
                 'id' => $customer->id,
                 'fname' => $customer->fname,
-                'lname' => User::isPlaceholderLastName($customer->lname) ? '' : $customer->lname,
+                'lname' => User::usableLastName($customer->lname, $customer->mname),
                 'company' => $customer->mname,
                 'email' => $customer->email,
                 'mobile' => $customer->mobile,
@@ -641,19 +641,16 @@ class CustomerController extends Controller
         if ($contact !== '') {
             $parts = preg_split('/\s+/', $contact, 2) ?: [];
             $fname = $parts[0] ?? 'Client';
-            $lname = $parts[1] ?? '';
-            if (User::isPlaceholderLastName($lname)) {
-                $lname = '';
-            }
+            $lname = User::usableLastName($parts[1] ?? '', $validated['company'] ?? $existing?->mname);
 
             return [$fname, $lname];
         }
 
         $fname = trim((string) ($validated['fname'] ?? $existing?->fname ?? ''));
-        $lname = trim((string) ($validated['lname'] ?? $existing?->lname ?? ''));
-        if (User::isPlaceholderLastName($lname)) {
-            $lname = '';
-        }
+        $lname = User::usableLastName(
+            $validated['lname'] ?? $existing?->lname,
+            $validated['company'] ?? $existing?->mname
+        );
 
         if ($fname === '') {
             $fname = 'Client';

@@ -88,18 +88,8 @@ class AccountController extends Controller
         $lname = $request->exists('lname')
             ? trim((string) $request->input('lname'))
             : trim((string) ($user->lname ?? ''));
-        if (User::isPlaceholderLastName($lname)) {
-            $lname = '';
-        }
-        if ($lname === '') {
-            [, $lname] = User::paynamicsPersonName(
-                (string) $request->fname,
-                '',
-                $user->mname,
-                $user->contact_person,
-                $user->email
-            );
-        }
+        [$fname, $lname] = User::paynamicsPersonName($request->fname, $lname, $user->mname);
+        $user->fname = $fname;
         $user->lname = $lname;
         if ($request->exists('mobile')) {
             $user->mobile = PhMobile::normalize($request->mobile);

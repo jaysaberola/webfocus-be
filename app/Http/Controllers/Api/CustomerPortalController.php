@@ -846,7 +846,7 @@ class CustomerPortalController extends Controller
 
         $requestedPayload = [
             'fname' => $validated['fname'],
-            'lname' => trim((string) ($validated['lname'] ?? '')),
+            'lname' => User::usableLastName($validated['lname'] ?? '', $validated['mname'] ?? $customer->mname),
             'mobile' => PhMobile::normalize($validated['mobile'] ?? null),
             'mname' => $validated['mname'] ?? null,
             'address_country' => $validated['address_country'] ?? null,
