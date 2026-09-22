@@ -249,6 +249,9 @@ class CustomerPortalController extends Controller
             abort_if($name === '', 422, 'Each new item needs a product name.');
 
             $catalog = $this->findCatalogPricedItem($name);
+            if (!$catalog) {
+                $catalog = DealMeta::pricedCatalogItem($name);
+            }
             abort_unless($catalog, 422, "No catalog price is available for {$name}.");
 
             $next[] = [
