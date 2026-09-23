@@ -286,4 +286,62 @@ class PaynamicsProofEvaluatorTest extends TestCase
         $this->assertTrue($result['valid'], $result['message']);
         $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
     }
+
+    public function test_accepts_paynamics_transaction_details_dashboard(): void
+    {
+        $text = <<<TXT
+        Transaction Details
+        PHP 11,856.00
+        SALE
+        REQUEST ID: WF260923092111V0SFVUL5
+        RESPONSE CODE / MESSAGE: GR002 Transaction Successful with 3DS
+        RESPONSE ID: 58448845974134600
+        TRANSACTION DATE: 9/23/2026 9:21:58 AM
+        PAYMENT CHANNEL: ubtp_cc_ph
+        LAST UPDATED: 9/23/2026 9:22:19 AM
+        ORDER DETAILS
+        CLOUD MICRO SERVER 1 x PHP 4,500.00
+        Add On - Auto Back-Up 1 x PHP 900.00
+        Add On - Static IP 1 x PHP 3,000.00
+        Country Level Domain (myskyinfo.ph) 1 x PHP 3,456.00
+        Subtotal Price PHP 11,856.00
+        Total PHP 11,856.00
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            11856.00,
+            ['WF260923092111VOSFVUL5']
+        );
+
+        $this->assertTrue($result['valid'], $result['message']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
+        $this->assertTrue($result['has_brand']);
+        $this->assertTrue($result['has_amount']);
+        $this->assertTrue($result['has_success']);
+    }
+
+    public function test_accepts_transaction_details_when_invoice_has_older_request_id(): void
+    {
+        $text = <<<TXT
+        Transaction Details
+        PHP 11,856.00
+        SALE
+        REQUEST ID: WF260923092111VOSFVUL5
+        RESPONSE CODE / MESSAGE: GR002 Transaction Successful with 3DS
+        RESPONSE ID: 58448845974134600
+        TRANSACTION DATE: 9/23/20269:21:58AM
+        ORDER DETAILS
+        Total PHP 11,856.00
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            11856.00,
+            ['WF260918101500ABCDEFGH']
+        );
+
+        $this->assertTrue($result['valid'], $result['message']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
+    }
 }

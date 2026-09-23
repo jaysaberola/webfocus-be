@@ -44,7 +44,9 @@ class PaynamicsProofEvaluator
             );
         }
 
-        $hasBrand = self::hasBrand($normalized, $compact) || self::hasHostedSuccessPage($normalized, $compact);
+        $hasBrand = self::hasBrand($normalized, $compact)
+            || self::hasHostedSuccessPage($normalized, $compact)
+            || self::hasTransactionDetailsPage($normalized, $compact);
         $matchedRequestId = self::matchedRequestId($compact, $requestIds);
         $extractedRequestIds = self::extractRequestIds($compact);
         $hasAmount = self::hasAmount($text, $normalized, $amount);
@@ -95,6 +97,13 @@ class PaynamicsProofEvaluator
             );
             if ($alignedId !== null) {
                 $matchedRequestId = $alignedId;
+            } elseif (
+                $extractedRequestIds !== []
+                && $hasAmount
+                && $hasSuccess
+                && $hasBrand
+            ) {
+                $matchedRequestId = $extractedRequestIds[0];
             } elseif ($extractedRequestIds !== []) {
                 return self::result(
                     false,
@@ -159,7 +168,23 @@ class PaynamicsProofEvaluator
             );
         }
 
-        if ($hasDate && $expectedTimes !== [] && ! self::receiptDateMatches($receiptTimes, $expectedTimes)) {
+        $extractedTimes = [];
+        foreach ($extractedRequestIds as $extractedId) {
+            $fromExtracted = self::paidAtFromRequestId($extractedId);
+            if ($fromExtracted) {
+                $extractedTimes[] = $fromExtracted;
+            }
+        }
+        $compareTimes = array_merge($expectedTimes, $extractedTimes);
+        $receiptAgreesWithItsId = $hasDate
+            && $extractedTimes !== []
+            && self::receiptDateMatches($receiptTimes, $extractedTimes);
+        if (
+            $hasDate
+            && $compareTimes !== []
+            && ! $receiptAgreesWithItsId
+            && ! self::receiptDateMatches($receiptTimes, $compareTimes)
+        ) {
             return self::result(
                 false,
                 self::CODE_DATE_MISMATCH,
@@ -225,6 +250,28 @@ class PaynamicsProofEvaluator
         return $hasSuccessTitle && $hasMerchant && $hasHostedFields;
     }
 
+    /**
+     * Paynamics merchant dashboard / email "Transaction Details" pages
+     * show SALE + GR00x instead of the hosted Payment Success layout.
+     */
+    private static function hasTransactionDetailsPage(string $normalized, string $compact): bool
+    {
+        $hasTitle = str_contains($compact, 'transactiondetails')
+            || str_contains($normalized, 'transaction details')
+            || str_contains($compact, 'orderdetails')
+            || str_contains($normalized, 'order details');
+        $hasSale = str_contains($normalized, 'transaction successful')
+            || (bool) preg_match('/gr0(01|02|33)/', $compact)
+            || preg_match('/\bsale\b/', $normalized);
+        $hasFields = (bool) preg_match('/request[a-z]{0,4}id/', $compact)
+            || str_contains($compact, 'responseid')
+            || str_contains($compact, 'responsecode')
+            || str_contains($compact, 'paymentchannel')
+            || self::extractRequestIds($compact) !== [];
+
+        return $hasTitle && $hasSale && $hasFields;
+    }
+
     private static function hasSuccess(string $normalized, string $compact): bool
     {
         $needles = [
@@ -241,6 +288,8 @@ class PaynamicsProofEvaluator
             'request id',
             'response id',
             'response code',
+            'transaction details',
+            'successful with 3ds',
         ];
 
         foreach ($needles as $needle) {
@@ -339,7 +388,7 @@ class PaynamicsProofEvaluator
             '/(?:payment\s+date|paid\s+(?:on|at)|transaction\s+date|date(?:\s*\/\s*time)?|txn\s+time)\s*[:\-]?\s*([a-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)/i',
             '/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/i',
             '/\b(\d{4}-\d{2}-\d{2}(?:[ t]\d{1,2}:\d{2}(?::\d{2})?)?)\b/',
-            '/\b(\d{1,2}\/\d{1,2}\/\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
+            '/\b(\d{1,2}\/\d{1,2}\/\d{4}(?:\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
             '/\b(\d{1,2}-\d{1,2}-\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
             '/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{1,2},?\s*\d{4}\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm))\b/i',
         ];
@@ -366,6 +415,19 @@ class PaynamicsProofEvaluator
             )) {
                 $parsed = self::toCarbon(
                     $match[1] . ' ' . $match[2] . ', ' . $match[3] . ' ' . $match[4] . ':' . $match[5] . ' ' . $match[6]
+                );
+                if ($parsed) {
+                    $found[] = $parsed;
+                }
+            } elseif (preg_match(
+                '/(\d{1,2})\/(\d{1,2})\/(\d{4})(\d{1,2}):(\d{2})(?::(\d{2}))?(am|pm)/i',
+                $compact,
+                $match
+            )) {
+                $parsed = self::toCarbon(
+                    $match[1] . '/' . $match[2] . '/' . $match[3] . ' ' . $match[4] . ':' . $match[5]
+                    . (isset($match[6]) && $match[6] !== '' ? ':' . $match[6] : '')
+                    . ' ' . ($match[7] ?? '')
                 );
                 if ($parsed) {
                     $found[] = $parsed;
