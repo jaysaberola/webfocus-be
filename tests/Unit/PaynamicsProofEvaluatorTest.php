@@ -238,4 +238,52 @@ class PaynamicsProofEvaluatorTest extends TestCase
         $this->assertFalse($result['valid']);
         $this->assertSame(PaynamicsProofEvaluator::CODE_WRONG_INVOICE, $result['code']);
     }
+
+    public function test_accepts_ocr_zero_as_letter_o_in_request_id(): void
+    {
+        $text = <<<TXT
+        Paymentost Success
+        WEBFOCUS SOLUTIONS, INC
+        Amountost PHP 11,856.00
+        Requestost IDD WF26O923O92111VOSFVUL5
+        Paymentost Datee Sep23,20269:22AM
+        Paymentost Methodo Credit Card
+        Paymentost Channelo Unionbank of the Philippines
+        Go back to merchant
+        Have concerns on payment?
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            11856.00,
+            ['WF260923092111VOSFVUL5']
+        );
+
+        $this->assertTrue($result['valid'], $result['message']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
+        $this->assertSame('WF260923092111VOSFVUL5', $result['matched_request_id']);
+    }
+
+    public function test_accepts_hosted_success_when_request_id_line_is_unreadable(): void
+    {
+        $text = <<<TXT
+        Paymentost Success
+        WEBFOCUS SOLUTIONS, INC
+        Amountost PHP 11,856.00
+        Paymentost Datee Sep 23, 2026 9:22 AM
+        Paymentost Methodo Credit Card
+        Paymentost Channelo Unionbank of the Philippines
+        Go back to merchant
+        Have concerns on payment?
+        TXT;
+
+        $result = PaynamicsProofEvaluator::evaluate(
+            $text,
+            11856.00,
+            ['WF260923092111VOSFVUL5']
+        );
+
+        $this->assertTrue($result['valid'], $result['message']);
+        $this->assertSame(PaynamicsProofEvaluator::CODE_OK, $result['code']);
+    }
 }

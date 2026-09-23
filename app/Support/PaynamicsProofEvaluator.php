@@ -54,6 +54,7 @@ class PaynamicsProofEvaluator
         $isCheckout = self::isCheckoutPage($normalized, $compact) && ! $hasSuccess && $matchedRequestId === null;
         $expectedIds = self::normalizeIdList($requestIds);
         $foreignIds = self::normalizeIdList($foreignRequestIds);
+        $expectedTimes = self::normalizeExpectedPaidAts($expectedPaidAts, $requestIds);
 
         if ($isCheckout) {
             return self::result(
@@ -83,7 +84,18 @@ class PaynamicsProofEvaluator
         }
 
         if ($expectedIds !== [] && $matchedRequestId === null) {
-            if ($extractedRequestIds !== []) {
+            $alignedId = self::alignedExpectedId(
+                $extractedRequestIds,
+                $requestIds,
+                $receiptTimes,
+                $expectedTimes,
+                $hasBrand,
+                $hasAmount,
+                $hasSuccess
+            );
+            if ($alignedId !== null) {
+                $matchedRequestId = $alignedId;
+            } elseif ($extractedRequestIds !== []) {
                 return self::result(
                     false,
                     self::CODE_WRONG_INVOICE,
@@ -94,18 +106,18 @@ class PaynamicsProofEvaluator
                     null,
                     $hasDate,
                 );
+            } else {
+                return self::result(
+                    false,
+                    self::CODE_REQUEST_ID_MISMATCH,
+                    'We could not match the Paynamics Request ID on this receipt to this invoice. Upload a clearer Payment Success screenshot for this payment.',
+                    $hasBrand,
+                    $hasAmount,
+                    $hasSuccess,
+                    null,
+                    $hasDate,
+                );
             }
-
-            return self::result(
-                false,
-                self::CODE_REQUEST_ID_MISMATCH,
-                'We could not match the Paynamics Request ID on this receipt to this invoice. Upload a clearer Payment Success screenshot for this payment.',
-                $hasBrand,
-                $hasAmount,
-                $hasSuccess,
-                null,
-                $hasDate,
-            );
         }
 
         if (! $hasBrand && $matchedRequestId === null) {
@@ -147,7 +159,6 @@ class PaynamicsProofEvaluator
             );
         }
 
-        $expectedTimes = self::normalizeExpectedPaidAts($expectedPaidAts, $requestIds);
         if ($hasDate && $expectedTimes !== [] && ! self::receiptDateMatches($receiptTimes, $expectedTimes)) {
             return self::result(
                 false,
@@ -198,14 +209,18 @@ class PaynamicsProofEvaluator
     private static function hasHostedSuccessPage(string $normalized, string $compact): bool
     {
         $hasSuccessTitle = str_contains($normalized, 'payment success')
-            || str_contains($compact, 'paymentsuccess');
+            || (bool) preg_match('/payment[a-z]{0,4}success/', $compact);
         $hasMerchant = str_contains($compact, 'webfocus')
             || str_contains($compact, 'gobacktomerchant')
-            || str_contains($normalized, 'have concerns on payment');
+            || str_contains($normalized, 'have concerns on payment')
+            || str_contains($compact, 'haveconcernsonpayment');
         $hasHostedFields = str_contains($compact, 'requestid')
+            || (bool) preg_match('/request[a-z]{0,4}id/', $compact)
             || str_contains($normalized, 'payment channel')
+            || (bool) preg_match('/payment[a-z]{0,4}channel/', $compact)
             || str_contains($normalized, 'payment method')
-            || (bool) preg_match('/wf[0-9]{12}[a-z0-9]{8}/', $compact);
+            || (bool) preg_match('/payment[a-z]{0,4}method/', $compact)
+            || self::extractRequestIds($compact) !== [];
 
         return $hasSuccessTitle && $hasMerchant && $hasHostedFields;
     }
@@ -235,8 +250,8 @@ class PaynamicsProofEvaluator
         }
 
         return (bool) preg_match('/gr0(01|02|33)/', $compact)
-            || str_contains($compact, 'paymentsuccess')
-            || str_contains($compact, 'requestid');
+            || (bool) preg_match('/payment[a-z]{0,4}success/', $compact)
+            || (bool) preg_match('/request[a-z]{0,4}id/', $compact);
     }
 
     private static function isCheckoutPage(string $normalized, string $compact): bool
@@ -270,6 +285,16 @@ class PaynamicsProofEvaluator
             if (preg_match($pattern, $haystack)) {
                 return true;
             }
+        }
+
+        $compactDigits = preg_replace('/[^0-9]/', '', $haystack) ?? '';
+        $amountDigits = preg_replace('/[^0-9]/', '', number_format($amount, 2, '.', '')) ?? '';
+        $wholeDigits = preg_replace('/[^0-9]/', '', number_format($amount, 0, '.', '')) ?? '';
+        if (strlen($wholeDigits) >= 4 && (
+            str_contains($compactDigits, $amountDigits) ||
+            str_contains($compactDigits, $wholeDigits)
+        )) {
+            return true;
         }
 
         return false;
@@ -316,6 +341,7 @@ class PaynamicsProofEvaluator
             '/\b(\d{4}-\d{2}-\d{2}(?:[ t]\d{1,2}:\d{2}(?::\d{2})?)?)\b/',
             '/\b(\d{1,2}\/\d{1,2}\/\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
             '/\b(\d{1,2}-\d{1,2}-\d{4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?)?)\b/',
+            '/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{1,2},?\s*\d{4}\s*\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm))\b/i',
         ];
 
         foreach ($patterns as $pattern) {
@@ -325,6 +351,22 @@ class PaynamicsProofEvaluator
 
             foreach ($matches[1] as $raw) {
                 $parsed = self::toCarbon($raw);
+                if ($parsed) {
+                    $found[] = $parsed;
+                }
+            }
+        }
+
+        if ($found === []) {
+            $compact = preg_replace('/\s+/', '', $haystack) ?? '';
+            if (preg_match(
+                '/(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*(\d{1,2}),?(\d{4})(\d{1,2}):(\d{2})(?::\d{2})?(am|pm)/i',
+                $compact,
+                $match
+            )) {
+                $parsed = self::toCarbon(
+                    $match[1] . ' ' . $match[2] . ', ' . $match[3] . ' ' . $match[4] . ':' . $match[5] . ' ' . $match[6]
+                );
                 if ($parsed) {
                     $found[] = $parsed;
                 }
@@ -366,7 +408,7 @@ class PaynamicsProofEvaluator
 
     private static function paidAtFromRequestId(string $requestId): ?Carbon
     {
-        $id = self::normalizeId($requestId);
+        $id = self::foldOcr(self::normalizeId($requestId));
         if (! preg_match('/^WF(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/', $id, $match)) {
             return null;
         }
@@ -434,6 +476,7 @@ class PaynamicsProofEvaluator
     private static function matchedRequestId(string $compact, array $requestIds): ?string
     {
         $haystack = strtoupper($compact);
+        $foldedHaystack = self::foldOcr($haystack);
 
         foreach ($requestIds as $requestId) {
             $id = self::normalizeId((string) $requestId);
@@ -441,7 +484,7 @@ class PaynamicsProofEvaluator
                 continue;
             }
 
-            if (str_contains($haystack, $id)) {
+            if (str_contains($haystack, $id) || str_contains($foldedHaystack, self::foldOcr($id))) {
                 return (string) $requestId;
             }
 
@@ -460,14 +503,104 @@ class PaynamicsProofEvaluator
      */
     private static function extractRequestIds(string $compact): array
     {
-        if (! preg_match_all('/wf[0-9]{12}[a-z0-9]{8}/i', $compact, $matches)) {
-            return [];
+        $patterns = [
+            '/wf[0-9]{12}[a-z0-9]{8}/i',
+            '/wf[0-9oOlLiI]{12}[a-z0-9]{6,10}/i',
+            '/wf[a-z0-9]{18,24}/i',
+        ];
+        $found = [];
+
+        foreach ($patterns as $pattern) {
+            if (! preg_match_all($pattern, $compact, $matches)) {
+                continue;
+            }
+            foreach ($matches[0] as $value) {
+                $found[] = self::normalizeId($value);
+            }
         }
 
-        return array_values(array_unique(array_map(
-            fn (string $value) => self::normalizeId($value),
-            $matches[0]
+        return array_values(array_unique(array_filter(
+            $found,
+            fn (string $value) => strlen($value) >= 18
         )));
+    }
+
+    /**
+     * @param  array<int, string>  $extractedRequestIds
+     * @param  array<int, string>  $requestIds
+     * @param  array<int, Carbon>  $receiptTimes
+     * @param  array<int, Carbon>  $expectedTimes
+     */
+    private static function alignedExpectedId(
+        array $extractedRequestIds,
+        array $requestIds,
+        array $receiptTimes,
+        array $expectedTimes,
+        bool $hasBrand,
+        bool $hasAmount,
+        bool $hasSuccess
+    ): ?string {
+        if (! $hasAmount || (! $hasBrand && ! $hasSuccess) || $requestIds === []) {
+            return null;
+        }
+
+        $dateMatches = $receiptTimes !== []
+            && $expectedTimes !== []
+            && self::receiptDateMatches($receiptTimes, $expectedTimes);
+
+        foreach ($extractedRequestIds as $extracted) {
+            $fromExtracted = self::paidAtFromRequestId(self::foldOcr($extracted));
+            if ($fromExtracted && $expectedTimes !== [] && self::receiptDateMatches([$fromExtracted], $expectedTimes)) {
+                return self::closestRequestId($requestIds, $fromExtracted);
+            }
+        }
+
+        if ($extractedRequestIds === [] && $dateMatches) {
+            return self::closestRequestId($requestIds, $receiptTimes[0] ?? null);
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  array<int, string>  $requestIds
+     */
+    private static function closestRequestId(array $requestIds, ?Carbon $anchor): string
+    {
+        $best = (string) ($requestIds[0] ?? '');
+        if (! $anchor) {
+            return $best;
+        }
+
+        $bestDiff = null;
+        foreach ($requestIds as $requestId) {
+            $fromId = self::paidAtFromRequestId((string) $requestId);
+            if (! $fromId) {
+                continue;
+            }
+            $diff = abs($fromId->diffInMinutes($anchor));
+            if ($bestDiff === null || $diff < $bestDiff) {
+                $bestDiff = $diff;
+                $best = (string) $requestId;
+            }
+        }
+
+        return $best;
+    }
+
+    private static function foldOcr(string $value): string
+    {
+        return strtr(strtoupper($value), [
+            'O' => '0',
+            'Q' => '0',
+            'D' => '0',
+            'I' => '1',
+            'L' => '1',
+            'S' => '5',
+            'Z' => '2',
+            'B' => '8',
+            'G' => '6',
+        ]);
     }
 
     /**
@@ -519,12 +652,19 @@ class PaynamicsProofEvaluator
             return true;
         }
 
+        $foldedExpected = self::foldOcr($expected);
+        $foldedFound = self::foldOcr($found);
+        if ($foldedExpected === $foldedFound || str_contains($foldedFound, $foldedExpected) || str_contains($foldedExpected, $foldedFound)) {
+            return true;
+        }
+
         $maxLen = max(strlen($expected), strlen($found));
         if ($maxLen < 12 || abs(strlen($expected) - strlen($found)) > 2) {
             return false;
         }
 
-        return levenshtein($expected, $found) <= 2;
+        return levenshtein($expected, $found) <= 2
+            || levenshtein($foldedExpected, $foldedFound) <= 2;
     }
 
     private static function normalize(string $text): string

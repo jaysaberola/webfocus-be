@@ -554,9 +554,12 @@ class PaynamicsService
              * Twenty-two alphanumeric characters, below the 23-character
              * Cybersource limit documented by Paynamics.
              */
-            $requestId = 'WF' .
-                now()->format('ymdHis') .
-                Str::upper(Str::random(8));
+            $alphabet = 'ABCDEFGHJKMNPQRTUVWXYZ23456789';
+            $suffix = '';
+            for ($i = 0; $i < 8; $i++) {
+                $suffix .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+            }
+            $requestId = 'WF' . now()->format('ymdHis') . $suffix;
         } while (PaynamicsPaymentReference::where('request_id', $requestId)->exists());
 
         return $requestId;
