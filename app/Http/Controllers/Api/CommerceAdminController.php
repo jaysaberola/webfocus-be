@@ -633,11 +633,10 @@ class CommerceAdminController extends Controller
     {
         $staff = $this->resolveStaff($request);
         $perPage = $request->integer('per_page', 50);
-        $isSales = $staff->hasAnyRole(['sales_admin', 'sales_staff']);
+        $canSeeQuotations = $this->canSeeWebDesignQuotations($staff);
 
-        // Web design quotations are Sales-only.
         $clientAlerts = collect();
-        if ($isSales) {
+        if ($canSeeQuotations) {
             $clientAlerts = $this->pendingWebDesignQuotationsQuery()
                 ->with(['customer:id,fname,lname,email,mname,owner_id', 'items'])
                 ->latest('transacted_at')
@@ -712,10 +711,9 @@ class CommerceAdminController extends Controller
 
         $inboxAlerts = $inboxRows
             ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets, $orders))
-            // Hide web design quotation inbox items from non-Sales staff.
-            ->filter(function (array $row) use ($isSales) {
+            ->filter(function (array $row) use ($canSeeQuotations) {
                 if (($row['kind'] ?? '') === 'web_design_quotation') {
-                    return $isSales;
+                    return $canSeeQuotations;
                 }
 
                 return true;
@@ -1198,6 +1196,8 @@ class CommerceAdminController extends Controller
             str_starts_with($referenceKey, 'admin:profile-change:') => 'profile_change',
             str_starts_with($referenceKey, 'admin:support-ticket:') => 'support_ticket',
             str_starts_with($referenceKey, 'admin:webdesign-quotation:') => 'web_design_quotation',
+            str_starts_with($referenceKey, 'admin:webdesign-signed:') => 'web_design_quotation',
+            str_starts_with($referenceKey, 'admin:webdesign-assigned:') => 'web_design_quotation',
             default => (string) ($row->type ?: 'general'),
         };
 
@@ -1429,9 +1429,20 @@ class CommerceAdminController extends Controller
         ];
     }
 
+    private function isSuperAdmin(User $staff): bool
+    {
+        return $staff->hasRole('admin');
+    }
+
+    private function canSeeWebDesignQuotations(User $staff): bool
+    {
+        return $this->isSuperAdmin($staff)
+            || $staff->hasAnyRole(['sales_admin', 'sales_staff']);
+    }
+
     private function staffInboxNotificationQuery(User $staff)
     {
-        $isSales = $staff->hasAnyRole(['sales_admin', 'sales_staff']);
+        $canSeeQuotations = $this->canSeeWebDesignQuotations($staff);
 
         return CustomerNotification::query()
             ->where('customer_id', $staff->id)
@@ -1444,7 +1455,7 @@ class CommerceAdminController extends Controller
                         'support_ticket',
                     ]);
             })
-            ->when(! $isSales, function ($query) {
+            ->when(! $canSeeQuotations, function ($query) {
                 $query->where(function ($inner) {
                     $inner->whereNull('type')
                         ->orWhere('type', '!=', 'web_design_quotation');

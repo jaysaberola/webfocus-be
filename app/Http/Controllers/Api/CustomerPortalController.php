@@ -580,7 +580,7 @@ class CustomerPortalController extends Controller
         $assigneeId = $transaction->client_owner_id ?: $transaction->user_id;
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             (int) $customer->id,
-            ['sales_admin'],
+            ['sales_admin', 'admin'],
             'admin:webdesign-signed:' . $transaction->id,
             'Signed Proposal Uploaded',
             trim(($customer->mname ?: $customer->full_name) ?: 'Client')

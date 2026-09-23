@@ -908,7 +908,7 @@ class SalesTransactionController extends Controller
 
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             $transaction->customer_id ? (int) $transaction->customer_id : null,
-            ['sales_admin', 'customer_care'],
+            ['sales_admin', 'admin', 'customer_care'],
             'admin:webdesign-quotation:' . $transaction->id,
             'Web Design Quotation Request',
             $staffBody,

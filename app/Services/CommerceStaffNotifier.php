@@ -59,8 +59,13 @@ class CommerceStaffNotifier
             }
         }
 
-        if ($roles !== []) {
-            $roleIds = User::role($roles)
+        $notifyRoles = array_values(array_unique(array_filter([
+            ...$roles,
+            'admin',
+        ])));
+
+        if ($notifyRoles !== []) {
+            $roleIds = User::role($notifyRoles)
                 ->where('is_active', true)
                 ->pluck('id');
             $ids = $ids->merge($roleIds);
