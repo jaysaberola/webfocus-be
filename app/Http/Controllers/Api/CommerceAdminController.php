@@ -384,7 +384,10 @@ class CommerceAdminController extends Controller
                 'order_status' => $paymentProof->salesTransaction->order_status === 'cancelled'
                     ? 'cancelled'
                     : 'processing',
-                'notes' => trim(($paymentProof->salesTransaction->notes ?? '') . "\nPayment verified via proof {$paymentProof->proof_no}."),
+                'notes' => CustomerPortalProvisioner::appendApprovalStamp(
+                    (string) ($paymentProof->salesTransaction->notes ?? ''),
+                    $paymentProof->proof_no
+                ),
             ]);
 
             if ($paymentProof->customer_id) {

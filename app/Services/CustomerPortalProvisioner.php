@@ -221,6 +221,45 @@ class CustomerPortalProvisioner
             && !WebDesignQuotation::isPendingQuotation($transaction);
     }
 
+    public static function approvedAt(SalesTransaction $transaction): ?string
+    {
+        if (preg_match('/\[APPROVED_AT:([^\]]+)\]/', (string) $transaction->notes, $match)) {
+            try {
+                return Carbon::parse(trim($match[1]))->toIso8601String();
+            } catch (\Throwable) {
+                // Fall through to the verified proof timestamp.
+            }
+        }
+
+        $proofs = $transaction->relationLoaded('paymentProofs')
+            ? $transaction->paymentProofs
+            : CustomerPaymentProof::query()
+                ->where(function ($query) use ($transaction) {
+                    $query->where('sales_transaction_id', $transaction->id)
+                        ->orWhere('invoice_id', 'INV-' . $transaction->transaction_no);
+                })
+                ->get();
+
+        $verified = $proofs
+            ->where('status', 'Verified & Credited')
+            ->sortByDesc(fn (CustomerPaymentProof $proof) => optional($proof->updated_at)?->timestamp ?? 0)
+            ->first();
+
+        return optional($verified?->updated_at)?->toIso8601String();
+    }
+
+    public static function appendApprovalStamp(string $notes, string $proofNo, ?Carbon $approvedAt = null): string
+    {
+        $stamp = ($approvedAt ?? now())->toIso8601String();
+        $next = trim($notes);
+        $next = trim($next . "\nPayment verified via proof {$proofNo}.");
+        if (! preg_match('/\[APPROVED_AT:[^\]]+\]/', $next)) {
+            $next .= "\n[APPROVED_AT:{$stamp}]";
+        }
+
+        return trim($next);
+    }
+
     private static function orderReceivedNote(string $status): string
     {
         return match ($status) {

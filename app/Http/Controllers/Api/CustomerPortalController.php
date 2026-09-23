@@ -111,7 +111,7 @@ class CustomerPortalController extends Controller
 
         $orders = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with(['items', 'paynamicsPaymentReferences'])
+            ->with(['items', 'paynamicsPaymentReferences', 'paymentProofs'])
             ->latest('created_at')
             ->latest('id')
             ->get()
@@ -1267,6 +1267,7 @@ class CustomerPortalController extends Controller
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
             'gateway' => $this->extractPaymentMethod($row),
             'paymentDate' => RelatedPaymentSync::dateFrom($row),
+            'approvedAt' => CustomerPortalProvisioner::approvedAt($row),
             'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
             'canCheckout' => $canCheckout,
             'canCancel' => in_array($status, [
