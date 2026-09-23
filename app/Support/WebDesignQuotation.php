@@ -47,9 +47,15 @@ class WebDesignQuotation
             return true;
         }
 
+        // Items are present and none are web design — do not treat a sibling
+        // "pending quotation" note as making this priced invoice a quotation.
+        if ($items->isNotEmpty()) {
+            return false;
+        }
+
         $notes = strtolower(self::notesOf($row));
 
-        return str_contains($notes, 'pending quotation')
+        return str_contains($notes, strtolower(self::PENDING_MARKER))
             || str_contains($notes, 'agency web design')
             || str_contains($notes, 'custom web design')
             || str_contains($notes, 'web development');
@@ -76,10 +82,6 @@ class WebDesignQuotation
 
     public static function displayAmount(SalesTransaction $row): float
     {
-        if (self::isPendingQuotation($row)) {
-            return 0.0;
-        }
-
         $stored = (float) $row->grand_total;
         $fromItems = 0.0;
         if ($row->relationLoaded('items') && $row->items && $row->items->isNotEmpty()) {
@@ -93,7 +95,12 @@ class WebDesignQuotation
             });
         }
 
-        return round(max($stored, $fromItems + DealMeta::missingAmount($row)), 2);
+        $computed = round(max($stored, $fromItems + DealMeta::missingAmount($row)), 2);
+        if (self::isPendingQuotation($row) && $computed <= 0) {
+            return 0.0;
+        }
+
+        return $computed;
     }
 
     public static function appendMarker(?string $notes, string $marker): string
