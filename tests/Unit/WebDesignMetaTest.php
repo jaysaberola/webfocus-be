@@ -54,7 +54,7 @@ class WebDesignMetaTest extends TestCase
         $this->assertCount(1, $mapped);
         $this->assertSame('Custom Web Design', $mapped[0]['name']);
         $this->assertSame('Business Starter Launch', $mapped[0]['detail']);
-        $this->assertArrayNotHasKey('additionalServices', $mapped[0]);
+        $this->assertSame(['Dashboard', 'Pop up Message/Advisory'], $mapped[0]['additionalServices']);
         $this->assertSame(0, $mapped[0]['price']);
     }
 

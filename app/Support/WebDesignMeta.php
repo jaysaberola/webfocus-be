@@ -186,12 +186,17 @@ class WebDesignMeta
      */
     public static function foldIntoPackage(array $items, ?string $notes): array
     {
+        $extras = self::additionalServices($notes);
         $clientNotes = self::clientNotes($notes);
         $folded = [];
         $packageIndex = null;
 
         foreach ($items as $item) {
             if (self::isAddonItem($item)) {
+                $label = trim((string) ($item['detail'] ?? ''));
+                if ($label !== '' && strcasecmp($label, 'additional service') !== 0) {
+                    $extras[] = $label;
+                }
                 continue;
             }
 
@@ -202,7 +207,8 @@ class WebDesignMeta
             $folded[] = $item;
         }
 
-        if ($clientNotes === '') {
+        $extras = self::uniqueLabels($extras);
+        if ($extras === [] && $clientNotes === '') {
             return $folded;
         }
 
@@ -211,7 +217,12 @@ class WebDesignMeta
         }
 
         if ($packageIndex !== null) {
-            $folded[$packageIndex]['clientNotes'] = $clientNotes;
+            if ($extras !== []) {
+                $folded[$packageIndex]['additionalServices'] = $extras;
+            }
+            if ($clientNotes !== '') {
+                $folded[$packageIndex]['clientNotes'] = $clientNotes;
+            }
         }
 
         return $folded;
