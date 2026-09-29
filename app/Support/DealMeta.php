@@ -46,6 +46,96 @@ class DealMeta
         return self::parse($notes) !== [];
     }
 
+    /**
+     * @return array<string, float>
+     */
+    public static function amountMap(?string $notes, string $key): array
+    {
+        $raw = self::parse($notes)[$key] ?? [];
+        if (! is_array($raw)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($raw as $name => $value) {
+            $amount = round((float) $value, 2);
+            $norm = self::normalizeName((string) $name);
+            if ($norm === '' || $amount <= 0) {
+                continue;
+            }
+            $out[$norm] = $amount;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, float>  $map
+     */
+    public static function amountFor(array $map, string ...$names): float
+    {
+        foreach ($names as $name) {
+            $norm = self::normalizeName($name);
+            if ($norm !== '' && isset($map[$norm])) {
+                return $map[$norm];
+            }
+        }
+
+        return 0.0;
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $items
+     * @return array{items: array<int, array<string, mixed>>, subtotal: float, discountTotal: float, taxTotal: float}
+     */
+    public static function applyLineAdjustments(array $items, SalesTransaction $row): array
+    {
+        $discounts = self::amountMap($row->notes, 'dealDiscounts');
+        $taxes = self::amountMap($row->notes, 'dealTaxes');
+        $next = [];
+
+        foreach ($items as $item) {
+            $detail = trim((string) ($item['detail'] ?? ''));
+            $name = trim((string) ($item['name'] ?? ''));
+            $item['discount'] = self::amountFor($discounts, $detail, $name);
+            $item['tax'] = self::amountFor($taxes, $detail, $name);
+            $next[] = $item;
+        }
+
+        $discountTotal = round(array_sum(array_map(fn ($item) => (float) ($item['discount'] ?? 0), $next)), 2);
+        $taxTotal = round(array_sum(array_map(fn ($item) => (float) ($item['tax'] ?? 0), $next)), 2);
+        $headerDiscount = round((float) $row->discount_total, 2);
+        $headerTax = round((float) $row->tax_total, 2);
+
+        if ($discountTotal <= 0 && $headerDiscount > 0 && $next !== []) {
+            $next[0]['discount'] = $headerDiscount;
+            $discountTotal = $headerDiscount;
+        }
+        if ($taxTotal <= 0 && $headerTax > 0 && $next !== []) {
+            $next[0]['tax'] = $headerTax;
+            $taxTotal = $headerTax;
+        }
+
+        $subtotal = round(array_sum(array_map(
+            fn ($item) => (float) ($item['total'] ?? $item['price'] ?? 0),
+            $next
+        )), 2);
+
+        return [
+            'items' => $next,
+            'subtotal' => $subtotal,
+            'discountTotal' => $discountTotal > 0 ? $discountTotal : $headerDiscount,
+            'taxTotal' => $taxTotal > 0 ? $taxTotal : $headerTax,
+        ];
+    }
+
+    private static function normalizeName(string $name): string
+    {
+        $norm = strtolower(trim(preg_replace('/[^a-z0-9]+/i', ' ', $name) ?? ''));
+
+        return trim(preg_replace('/\s+/', ' ', $norm) ?? $norm);
+    }
+
     public static function domainName(?string $notes): string
     {
         $meta = self::parse($notes);
@@ -260,6 +350,8 @@ class DealMeta
             'unitPrice' => $amount,
             'price' => $amount,
             'total' => $amount,
+            'discount' => 0,
+            'tax' => 0,
         ];
     }
 }

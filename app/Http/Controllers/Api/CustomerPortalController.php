@@ -1253,6 +1253,8 @@ class CustomerPortalController extends Controller
                 'unitPrice' => $unit,
                 'price' => $total,
                 'total' => $total,
+                'discount' => 0,
+                'tax' => 0,
             ];
         })->values()->all();
 
@@ -1262,6 +1264,8 @@ class CustomerPortalController extends Controller
             $items[] = $domainLine;
         }
         $items = WebDesignMeta::foldIntoPackage($items, $row->notes);
+        $priced = DealMeta::applyLineAdjustments($items, $row);
+        $items = $priced['items'];
         $amount = WebDesignQuotation::displayAmount($row);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
@@ -1289,6 +1293,9 @@ class CustomerPortalController extends Controller
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'total' => $amount,
             'grandTotal' => $amount,
+            'subtotal' => $priced['subtotal'],
+            'discountTotal' => $priced['discountTotal'],
+            'taxTotal' => $priced['taxTotal'],
             'adminPriced' => WebDesignQuotation::isAdminPriced($row),
             'status' => $status,
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
