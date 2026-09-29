@@ -16,6 +16,7 @@ use App\Services\PaynamicsService;
 use App\Support\PendingCheckoutGuard;
 use App\Support\StorageUrl;
 use App\Support\TransactionLabelResolver;
+use App\Support\WebDesignMeta;
 use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
 use Illuminate\Database\QueryException;
@@ -876,18 +877,21 @@ class SalesTransactionController extends Controller
         }
 
         $items = $transaction->items ?? collect();
-        $itemNames = $items->pluck('name')->filter()->take(3)->implode(', ');
+        $itemNames = WebDesignMeta::packageItemLine($items, $transaction->notes);
         $clientLabel = $transaction->customer_name
             ?: ($transaction->customer?->full_name ?? 'Client');
+        $detailSuffix = WebDesignMeta::inboxDetailSuffix($transaction->notes);
 
         if ($transaction->customer_id) {
             CustomerNotification::create([
                 'customer_id' => $transaction->customer_id,
+                'reference_key' => 'webdesign-quotation:'.$transaction->id,
                 'title' => 'Web Design Quotation Submitted',
                 'body' => 'Your web design quotation request '
                     . $transaction->transaction_no
                     . ($itemNames ? " ({$itemNames})" : '')
-                    . ' was sent to Sales. Status is Pending Quotation until the proposal is ready.',
+                    . ' was sent to Sales. Status is Pending Quotation until the proposal is ready.'
+                    . $detailSuffix,
                 'type' => 'general',
                 'action_url' => '/public/dashboard?tab=billing',
             ]);
@@ -904,7 +908,8 @@ class SalesTransactionController extends Controller
             . " ({$transaction->transaction_no}). "
             . ($assigneeName
                 ? "Auto-assigned to {$assigneeName}. They should upload the proposal quotation."
-                : 'Assign Myrna Glorioso or Michelle Durian and upload the proposal quotation.');
+                : 'Assign Myrna Glorioso or Michelle Durian and upload the proposal quotation.')
+            . $detailSuffix;
 
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             $transaction->customer_id ? (int) $transaction->customer_id : null,
@@ -928,7 +933,8 @@ class SalesTransactionController extends Controller
                     'body' => 'You were assigned web design order '
                         . $transaction->transaction_no
                         . ($itemNames ? " ({$itemNames})" : '')
-                        . '. Upload the proposal quotation in Orders.',
+                        . '. Upload the proposal quotation in Orders.'
+                        . $detailSuffix,
                     'type' => 'web_design_quotation',
                     'action_url' => '/public/commerce-admin?tab=orders',
                     'read_at' => null,

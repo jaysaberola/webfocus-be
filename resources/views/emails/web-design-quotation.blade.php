@@ -39,10 +39,17 @@
         </ul>
       </div>
 
-      @if ($transaction->notes)
+      @if (!empty($additionalServices))
+        <div style="margin-top:18px;">
+          <strong style="color:#374151;">Included services</strong>
+          <div style="margin-top:8px;">{{ implode(', ', $additionalServices) }}</div>
+        </div>
+      @endif
+
+      @if (!empty($clientNotes))
         <div style="margin-top:18px;">
           <strong style="color:#374151;">Notes</strong>
-          <div style="margin-top:8px;padding:14px;background:#f1f5f9;border-left:4px solid #2563eb;border-radius:6px;white-space:pre-line;">{{ $transaction->notes }}</div>
+          <div style="margin-top:8px;padding:14px;background:#f1f5f9;border-left:4px solid #2563eb;border-radius:6px;white-space:pre-line;">{{ $clientNotes }}</div>
         </div>
       @endif
 

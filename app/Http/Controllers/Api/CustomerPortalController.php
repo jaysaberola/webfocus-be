@@ -19,6 +19,7 @@ use App\Support\PendingCheckoutGuard;
 use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
+use App\Support\WebDesignMeta;
 use App\Support\WebDesignQuotation;
 use App\Support\PhMobile;
 use App\Services\CommerceStaffNotifier;
@@ -635,12 +636,16 @@ class CustomerPortalController extends Controller
 
         $serviceIds = [];
         $transactionIds = [];
+        $transactionNos = [];
         foreach ($rows as $row) {
             $key = (string) $row->reference_key;
             if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
                 $serviceIds[] = (int) $match[1];
-            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:)(\d+)$/', $key, $match)) {
+            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|webdesign-quotation:)(\d+)$/', $key, $match)) {
                 $transactionIds[] = (int) $match[1];
+            }
+            if (preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)) {
+                $transactionNos[] = $match[1];
             }
         }
 
@@ -659,6 +664,15 @@ class CustomerPortalController extends Controller
                 ->whereIn('id', $transactionIds)
                 ->get()
                 ->keyBy('id');
+        if ($transactionNos !== []) {
+            $byNo = SalesTransaction::query()
+                ->with('items')
+                ->where('customer_id', $customer->id)
+                ->whereIn('transaction_no', array_values(array_unique($transactionNos)))
+                ->get()
+                ->keyBy('id');
+            $transactions = $transactions->union($byNo);
+        }
         $proofs = CustomerPaymentProof::query()
             ->where('customer_id', $customer->id)
             ->latest()
@@ -1219,10 +1233,15 @@ class CustomerPortalController extends Controller
             if ($unit <= 0 && $quantity > 0) {
                 $unit = round($total / $quantity, 2);
             }
+            $itemType = strtolower((string) ($item->item_type ?? ''));
+            $isWebAddon = str_contains($itemType, 'web_design_addon')
+                || str_contains($itemType, 'webdesign_addon');
 
             return [
                 'id' => $item->id,
-                'name' => TransactionLabelResolver::serviceCategory($item->name, $item->item_type),
+                'name' => $isWebAddon
+                    ? 'Additional Service'
+                    : TransactionLabelResolver::serviceCategory($item->name, $item->item_type),
                 'detail' => $item->name,
                 'itemType' => $item->item_type,
                 'quantity' => $quantity,
@@ -1237,6 +1256,7 @@ class CustomerPortalController extends Controller
         if ($domainLine) {
             $items[] = $domainLine;
         }
+        $items = WebDesignMeta::foldIntoPackage($items, $row->notes);
         $amount = WebDesignQuotation::displayAmount($row);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
@@ -1405,6 +1425,7 @@ class CustomerPortalController extends Controller
         $key = (string) $row->reference_key;
         $type = (string) ($row->type ?: 'general');
         $intro = (string) $row->body;
+        $desc = (string) $row->body;
         $details = [];
         $attachments = [];
 
@@ -1449,6 +1470,38 @@ class CustomerPortalController extends Controller
                         'Proof Status' => $proof->status,
                     ]));
                 }
+            }
+        }
+
+        if ($details === []) {
+            $webDesignOrder = null;
+            if (preg_match('/^webdesign-quotation:(\d+)$/', $key, $match)) {
+                $webDesignOrder = $transactions->get((int) $match[1]);
+            } elseif (
+                stripos($row->title, 'web design') !== false
+                && preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)
+            ) {
+                $webDesignOrder = $transactions->firstWhere('transaction_no', $match[1]);
+            }
+
+            if ($webDesignOrder) {
+                $itemNames = WebDesignMeta::packageItemLine($webDesignOrder->items, $webDesignOrder->notes);
+                $inboxFields = WebDesignMeta::inboxFields($webDesignOrder->notes);
+                $intro = 'Your web design quotation request '
+                    .$webDesignOrder->transaction_no
+                    .($itemNames ? " ({$itemNames})" : '')
+                    .' was sent to Sales. Status is Pending Quotation until the proposal is ready.'
+                    .WebDesignMeta::inboxDetailSuffix($webDesignOrder->notes);
+                $desc = $intro;
+                $details = $this->portalInboxDetails([
+                    'Order No' => $webDesignOrder->transaction_no,
+                    'Items' => $itemNames,
+                    'Included services' => $inboxFields['Included services'],
+                    'Notes' => $inboxFields['Notes'],
+                    'Amount' => '₱'.number_format((float) WebDesignQuotation::displayAmount($webDesignOrder), 2),
+                    'Status' => $webDesignOrder->order_status ?: $webDesignOrder->payment_status,
+                    'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+                ]);
             }
         }
 
@@ -1516,7 +1569,7 @@ class CustomerPortalController extends Controller
         return [
             'id' => $row->id,
             'title' => $row->title,
-            'desc' => $row->body,
+            'desc' => $desc,
             'intro' => $intro,
             'date' => optional($row->created_at)->format('Y-m-d'),
             'createdAt' => optional($row->created_at)?->toIso8601String(),

@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Support\ServiceCatalogLabelResolver;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
+use App\Support\WebDesignMeta;
 use App\Support\WebDesignQuotation;
 use App\Services\ClientOwnerRotator;
 use App\Services\CustomerPortalNotificationSync;
@@ -155,6 +156,8 @@ class CommerceAdminController extends Controller
         $salesTransaction->update($assignment);
 
         if (WebDesignQuotation::isWebDesign($salesTransaction) && WebDesignQuotation::isPendingQuotation($salesTransaction)) {
+            $detailSuffix = WebDesignMeta::inboxDetailSuffix($salesTransaction->notes);
+
             CustomerNotification::query()->updateOrCreate(
                 [
                     'customer_id' => $assignee->id,
@@ -164,7 +167,8 @@ class CommerceAdminController extends Controller
                     'title' => 'New Web Design Assignment',
                     'body' => 'You were assigned web design order '
                         . $salesTransaction->transaction_no
-                        . '. Upload the proposal quotation in Orders.',
+                        . '. Upload the proposal quotation in Orders.'
+                        . $detailSuffix,
                     'type' => 'web_design_quotation',
                     'action_url' => '/public/commerce-admin?tab=orders',
                     'read_at' => null,
@@ -676,6 +680,8 @@ class CommerceAdminController extends Controller
             } elseif (preg_match('/^admin:support-ticket:(\d+)$/', $key, $m)) {
                 $ticketIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $key, $m)) {
+                $orderIds[] = (int) $m[1];
+            } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed):(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
             }
         }
@@ -1214,6 +1220,7 @@ class CommerceAdminController extends Controller
         $attachments = [];
         $details = [];
         $intro = (string) $row->body;
+        $desc = (string) $row->body;
         $transactionNo = null;
         $referenceId = null;
 
@@ -1324,6 +1331,31 @@ class CommerceAdminController extends Controller
                     'Cancelled' => $this->formatAppDateTime($row->created_at),
                 ]);
             }
+        } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed):(\d+)$/', $referenceKey, $match)) {
+            $order = $orders->get((int) $match[1]);
+            if ($order) {
+                $customer = $order->customer;
+                $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
+                $fromEmail = $customer?->email ?: $order->customer_email;
+                $transactionNo = $order->transaction_no;
+                $itemNames = WebDesignMeta::packageItemLine($order->items, $order->notes);
+                $inboxFields = WebDesignMeta::inboxFields($order->notes);
+                $preview = WebDesignMeta::inboxPreviewSuffix($order->notes);
+                if ($preview !== '' && ! str_contains($desc, 'Notes:')) {
+                    $desc .= $preview;
+                }
+                $details = $this->inboxDetails([
+                    'Client' => $fromName,
+                    'Email' => $fromEmail,
+                    'Order No' => $order->transaction_no,
+                    'Items' => $itemNames,
+                    'Included services' => $inboxFields['Included services'],
+                    'Notes' => $inboxFields['Notes'],
+                    'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($order)),
+                    'Status' => $status,
+                    'Submitted' => $this->formatAppDateTime($row->created_at),
+                ]);
+            }
         } elseif ($kind === 'billing') {
             $intro = $row->body ?: 'A client deleted one or more invoices from their billing list.';
             $details = $this->inboxDetails([
@@ -1354,7 +1386,7 @@ class CommerceAdminController extends Controller
             'id' => (int) $row->id,
             'kind' => $kind,
             'title' => $row->title,
-            'desc' => $row->body,
+            'desc' => $desc,
             'intro' => $intro,
             'date' => $this->formatAppDateTime($row->created_at),
             'audience' => $fromName ?: 'Assigned / Role Inbox',
@@ -1381,9 +1413,8 @@ class CommerceAdminController extends Controller
             ?: (trim(($customer?->mname ?: '') !== ''
                 ? (string) $customer->mname
                 : ($customer?->full_name ?? 'Client')));
-        $itemNames = $row->items
-            ? $row->items->pluck('name')->filter()->take(3)->implode(', ')
-            : '';
+        $itemNames = WebDesignMeta::packageItemLine($row->items, $row->notes);
+        $inboxFields = WebDesignMeta::inboxFields($row->notes);
 
         $needsProposal = ! WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SUBMITTED);
         $needsProceed = WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SIGNED);
@@ -1400,6 +1431,7 @@ class CommerceAdminController extends Controller
                 "{$client} has a web design order"
                 . ($itemNames ? " ({$itemNames})" : '')
                 . ". Transaction {$row->transaction_no}."
+                . WebDesignMeta::inboxPreviewSuffix($row->notes)
             ),
             'intro' => "{$client} has a web design order that still needs sales action.",
             'date' => $this->formatAppDateTime(
@@ -1421,6 +1453,8 @@ class CommerceAdminController extends Controller
                 'Email' => $row->customer_email ?: ($customer?->email),
                 'Order No' => $row->transaction_no,
                 'Items' => $itemNames,
+                'Included services' => $inboxFields['Included services'],
+                'Notes' => $inboxFields['Notes'],
                 'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($row)),
                 'Status' => $status,
                 'Payment Status' => $row->payment_status,
