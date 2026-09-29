@@ -215,6 +215,11 @@ class CustomerPortalController extends Controller
             422,
             'Pending quotation orders cannot be edited here.'
         );
+        abort_if(
+            WebDesignQuotation::isAdminPriced($salesTransaction),
+            422,
+            'This order was priced by sales and cannot be customized.'
+        );
 
         $validated = $request->validate([
             'items' => ['required', 'array', 'min:1', 'max:40'],
@@ -1275,7 +1280,7 @@ class CustomerPortalController extends Controller
             'id' => $row->transaction_no,
             'recordId' => $row->id,
             'invoiceId' => $this->invoiceId($row),
-            'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
+            'serviceName' => TransactionLabelResolver::productCategoryFromTransaction($row->notes, $row->items),
             'plan' => $planLabel,
             'domain' => $domain ?: null,
             'date' => TransactionLabelResolver::issuedDateFrom($row->transacted_at),
@@ -1283,6 +1288,7 @@ class CustomerPortalController extends Controller
             'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'total' => $amount,
+            'adminPriced' => WebDesignQuotation::isAdminPriced($row),
             'status' => $status,
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
             'gateway' => $this->extractPaymentMethod($row),
@@ -1351,10 +1357,10 @@ class CustomerPortalController extends Controller
             'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
             'canPay' => $canPay,
             'daysUntilDue' => $daysUntilDue,
-            'serviceName' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
+            'serviceName' => TransactionLabelResolver::productCategoryFromTransaction($row->notes, $row->items),
             'plan' => $planLabel,
             'subscription' => $planLabel,
-            'items' => TransactionLabelResolver::serviceCategoryFromItems($row->items),
+            'items' => TransactionLabelResolver::productCategoryFromTransaction($row->notes, $row->items),
             'pendingQuotation' => $pendingQuotation,
             'proposalSubmitted' => $proposalSubmitted,
             'proposalSigned' => $proposalSigned,

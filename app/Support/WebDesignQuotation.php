@@ -80,9 +80,21 @@ class WebDesignQuotation
         return ! self::isPaymentRequested($row);
     }
 
+    public static function isAdminPriced(SalesTransaction $row): bool
+    {
+        return DealMeta::present($row->notes);
+    }
+
     public static function displayAmount(SalesTransaction $row): float
     {
-        $stored = (float) $row->grand_total;
+        $stored = round((float) $row->grand_total, 2);
+        if (self::isPendingQuotation($row) && $stored <= 0) {
+            return 0.0;
+        }
+        if (self::isAdminPriced($row)) {
+            return max(0.0, $stored);
+        }
+
         $fromItems = 0.0;
         if ($row->relationLoaded('items') && $row->items && $row->items->isNotEmpty()) {
             $fromItems = (float) $row->items->sum(function ($item) {

@@ -225,7 +225,7 @@ class SalesTransactionController extends Controller
         $overlapping = $guard->overlappingPending($customer, $items);
         if ($overlapping) {
             $invoiceId = PendingCheckoutGuard::invoiceId($overlapping);
-            $service = TransactionLabelResolver::serviceCategoryFromItems($overlapping->items);
+            $service = TransactionLabelResolver::productCategoryFromTransaction($overlapping->notes, $overlapping->items);
 
             return response()->json([
                 'message' => "You already have a pending Paynamics payment for {$service} ({$invoiceId}). Finish that payment instead of creating a new invoice.",

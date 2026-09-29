@@ -41,6 +41,11 @@ class DealMeta
         return is_array($decoded) ? $decoded : [];
     }
 
+    public static function present(?string $notes): bool
+    {
+        return self::parse($notes) !== [];
+    }
+
     public static function domainName(?string $notes): string
     {
         $meta = self::parse($notes);
@@ -51,6 +56,16 @@ class DealMeta
 
         $value = preg_replace('#^https?://#i', '', $value) ?? $value;
         $value = strtolower(trim(explode('/', $value)[0] ?? $value, '.'));
+
+        return $value;
+    }
+
+    public static function productCategory(?string $notes): string
+    {
+        $value = trim((string) (self::parse($notes)['productCategory'] ?? ''));
+        if ($value === '' || $value === '—') {
+            return '';
+        }
 
         return $value;
     }

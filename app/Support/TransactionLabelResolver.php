@@ -12,6 +12,20 @@ class TransactionLabelResolver
         'high-concurrency e-commerce plus',
     ];
 
+    private const PRODUCT_CATEGORIES = [
+        'Add On',
+        'Cloud Hosting',
+        'Dedicated Bare Metal Server',
+        'Dedicated Cloud Server',
+        'Document Management System',
+        'Domain Registration',
+        'Managed I.T. Services',
+        'Others',
+        'Resellership',
+        'Web Development',
+        'Web Hosting - Shared',
+    ];
+
     public static function serviceCategory(?string $name, ?string $itemType = null): string
     {
         $haystack = strtolower(trim(($name ?? '') . ' ' . ($itemType ?? '')));
@@ -68,6 +82,102 @@ class TransactionLabelResolver
             ?? $items->first();
 
         return self::serviceCategory($first?->name, $first?->item_type);
+    }
+
+    public static function productCategoryFromTransaction(?string $notes, ?Collection $items): string
+    {
+        $fromMeta = DealMeta::productCategory($notes);
+        if ($fromMeta !== '') {
+            return $fromMeta;
+        }
+
+        return self::productCategoryFromItems($items);
+    }
+
+    public static function productCategoryFromItems(?Collection $items): string
+    {
+        if (!$items || $items->isEmpty()) {
+            return 'Service';
+        }
+
+        foreach ($items as $item) {
+            if (self::isAddonLineItem($item->name, $item->item_type)) {
+                continue;
+            }
+            $category = self::productCategoryFromName($item->name, $item->item_type);
+            if ($category !== '') {
+                return $category;
+            }
+        }
+
+        $first = $items->first();
+
+        return self::productCategoryFromName($first?->name, $first?->item_type) ?: 'Service';
+    }
+
+    public static function productCategoryFromName(?string $name, ?string $itemType = null): string
+    {
+        $haystack = strtolower(trim(($name ?? '') . ' ' . ($itemType ?? '')));
+        if ($haystack === '') {
+            return '';
+        }
+
+        foreach (self::PRODUCT_CATEGORIES as $category) {
+            if (strtolower($category) === $haystack) {
+                return $category;
+            }
+        }
+
+        if (self::isAddonLineItem($name, $itemType)) {
+            return 'Add On';
+        }
+        if (str_contains($haystack, 'resell')) {
+            return 'Resellership';
+        }
+        if (
+            str_contains($haystack, 'dms')
+            || str_contains($haystack, 'document management')
+            || str_contains($haystack, 'filehold')
+            || str_contains($haystack, 'docukit')
+            || str_contains($haystack, 'filecare')
+        ) {
+            return 'Document Management System';
+        }
+        if (
+            str_contains($haystack, 'eset')
+            || str_contains($haystack, 'doc pedro')
+            || str_contains($haystack, 'managed i.t')
+            || str_contains($haystack, 'managed it')
+        ) {
+            return 'Managed I.T. Services';
+        }
+        if (self::isWebDesignPlan($name, $itemType) || str_contains($haystack, 'web development')) {
+            return 'Web Development';
+        }
+        if (str_contains($haystack, 'domain') || self::looksLikeDomain($name)) {
+            return 'Domain Registration';
+        }
+        if (preg_match('/bare\s*-?\s*metal|baremetal/i', $haystack)) {
+            return 'Dedicated Bare Metal Server';
+        }
+        if (str_contains($haystack, 'dedicated')) {
+            return 'Dedicated Cloud Server';
+        }
+        if (str_contains($haystack, 'cloud')) {
+            return 'Cloud Hosting';
+        }
+        if (
+            str_contains($haystack, 'shared')
+            || str_contains($haystack, 'web hosting')
+            || preg_match('/\b(starter|deluxe|standard)\b/', $haystack)
+        ) {
+            return 'Web Hosting - Shared';
+        }
+        if (str_contains($haystack, 'consult') || str_contains($haystack, 'other')) {
+            return 'Others';
+        }
+
+        return '';
     }
 
     public static function customerPlanFamily(?string $category): string
