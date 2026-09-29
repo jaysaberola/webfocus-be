@@ -39,10 +39,10 @@ class WebDesignQuotationDisplayAmountTest extends TestCase
         $this->assertSame(3360.0, WebDesignQuotation::displayAmount($row));
     }
 
-    public function test_customer_cart_order_still_uses_the_higher_item_total(): void
+    public function test_customer_cart_order_uses_stored_grand_total(): void
     {
         $row = $this->makeRow([
-            'grand_total' => 1728,
+            'grand_total' => 6228,
             'discount_total' => 0,
             'tax_total' => 0,
             'payment_status' => 'pending',
@@ -54,6 +54,21 @@ class WebDesignQuotationDisplayAmountTest extends TestCase
 
         $this->assertFalse(WebDesignQuotation::isAdminPriced($row));
         $this->assertSame(6228.0, WebDesignQuotation::displayAmount($row));
+    }
+
+    public function test_falls_back_to_item_sum_when_grand_total_is_zero(): void
+    {
+        $row = $this->makeRow([
+            'grand_total' => 0,
+            'discount_total' => 0,
+            'tax_total' => 0,
+            'payment_status' => 'pending',
+            'notes' => 'Public cart checkout',
+        ], [
+            ['name' => 'Shared Hosting', 'item_type' => 'hosting', 'price' => 4500, 'quantity' => 1, 'total_price' => 4500],
+        ]);
+
+        $this->assertSame(4500.0, WebDesignQuotation::displayAmount($row));
     }
 
     /**

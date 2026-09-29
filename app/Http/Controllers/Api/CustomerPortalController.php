@@ -1288,6 +1288,7 @@ class CustomerPortalController extends Controller
             'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
             'total' => $amount,
+            'grandTotal' => $amount,
             'adminPriced' => WebDesignQuotation::isAdminPriced($row),
             'status' => $status,
             'paymentStatus' => $paid ? 'Paid' : (strtolower((string) $row->payment_status) === 'cancelled' ? 'Cancelled' : 'Unpaid'),
@@ -1344,6 +1345,7 @@ class CustomerPortalController extends Controller
         $proposal = $row->relationLoaded('proposals')
             ? $row->proposals->where('kind', 'proposal')->sortByDesc('id')->first()
             : $row->proposals()->where('kind', 'proposal')->latest()->first();
+        $amount = WebDesignQuotation::displayAmount($row);
 
         return [
             'id' => $this->invoiceId($row),
@@ -1351,7 +1353,8 @@ class CustomerPortalController extends Controller
             'date' => optional($row->transacted_at)->format('Y-m-d'),
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'due' => optional($dueAt)->format('Y-m-d'),
-            'amount' => WebDesignQuotation::displayAmount($row),
+            'amount' => $amount,
+            'grandTotal' => $amount,
             'status' => $status,
             'paymentDate' => RelatedPaymentSync::dateFrom($row),
             'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),

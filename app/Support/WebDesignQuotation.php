@@ -91,8 +91,8 @@ class WebDesignQuotation
         if (self::isPendingQuotation($row) && $stored <= 0) {
             return 0.0;
         }
-        if (self::isAdminPriced($row)) {
-            return max(0.0, $stored);
+        if ($stored > 0) {
+            return $stored;
         }
 
         $fromItems = 0.0;
@@ -107,12 +107,7 @@ class WebDesignQuotation
             });
         }
 
-        $computed = round(max($stored, $fromItems + DealMeta::missingAmount($row)), 2);
-        if (self::isPendingQuotation($row) && $computed <= 0) {
-            return 0.0;
-        }
-
-        return $computed;
+        return round(max(0, $fromItems + DealMeta::missingAmount($row)), 2);
     }
 
     public static function appendMarker(?string $notes, string $marker): string
