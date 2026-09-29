@@ -404,7 +404,8 @@ class DomainLookupController extends Controller
         }
 
         foreach ($tlds as $tld) {
-            if (str_ends_with($domain, '.' . $tld->tld)) {
+            $stored = ltrim((string) $tld->tld, '.');
+            if ($stored !== '' && str_ends_with($domain, '.' . $stored)) {
                 return $tld;
             }
         }
@@ -511,10 +512,65 @@ class DomainLookupController extends Controller
     {
         $domain = $this->cleanDomain($domain);
         $cacheKey = $this->availabilityCacheKey($domain);
+        $cached = $this->cachedAvailabilityResult($cacheKey);
 
-        return Cache::remember($cacheKey, now()->addMinutes($this->availabilityCacheMinutes), function () use ($domain) {
-            return $this->checkDomainAvailabilityUsingProviders($domain);
-        });
+        if ($cached) {
+            return $cached;
+        }
+
+        $result = $this->checkDomainAvailabilityUsingProviders($domain);
+        $this->rememberAvailabilityResult($cacheKey, $result);
+
+        return $result;
+    }
+
+    private function isFinalAvailabilityResult(mixed $result): bool
+    {
+        return is_array($result)
+            && array_key_exists('available', $result)
+            && ($result['available'] === true || $result['available'] === false);
+    }
+
+    private function cachedAvailabilityResult(string $cacheKey): ?array
+    {
+        $cached = Cache::get($cacheKey);
+
+        return $this->isFinalAvailabilityResult($cached) ? $cached : null;
+    }
+
+    private function rememberAvailabilityResult(string $cacheKey, array $result): void
+    {
+        if (!$this->isFinalAvailabilityResult($result)) {
+            return;
+        }
+
+        Cache::put($cacheKey, $result, now()->addMinutes($this->availabilityCacheMinutes));
+    }
+
+    private function resolveLookupTld(string $domain, ?string $hintTld = null): ?string
+    {
+        $matched = $this->findMatchingTld($domain);
+        if ($matched) {
+            return ltrim((string) $matched->tld, '.');
+        }
+
+        $hint = ltrim(strtolower(trim((string) $hintTld)), '.');
+        if ($hint !== '') {
+            return $hint;
+        }
+
+        $domain = $this->cleanDomain($domain);
+        foreach (['com.ph', 'net.ph', 'org.ph', 'edu.ph', 'gov.ph'] as $tld) {
+            if (str_ends_with($domain, '.' . $tld)) {
+                return $tld;
+            }
+        }
+
+        if (preg_match('/\.([a-z0-9]+)$/', $domain, $matches)) {
+            return $matches[1];
+        }
+
+        return null;
     }
 
     private function availabilityCacheKey(string $domain): string
@@ -656,23 +712,25 @@ class DomainLookupController extends Controller
                 continue;
             }
 
-            if (Cache::has($cacheKey)) {
-                $cached = Cache::get($cacheKey);
+            $cached = $this->cachedAvailabilityResult($cacheKey);
+            if ($cached) {
                 $this->applyAvailabilityResultToSuggestion($suggestions, $key, $cached);
                 continue;
             }
 
-            $matchedTld = $this->findMatchingTld($domain);
+            $lookupTld = $this->resolveLookupTld(
+                $domain,
+                isset($suggestion['tld']) ? (string) $suggestion['tld'] : null
+            );
 
-            if (!$matchedTld) {
-                $result = $this->providerUnknown('Unsupported domain extension in your local database.', 'local');
-                Cache::put($cacheKey, $result, now()->addMinutes($this->availabilityCacheMinutes));
+            if (!$lookupTld) {
+                $result = $this->providerUnknown('Could not determine domain extension.', 'local');
                 $this->applyAvailabilityResultToSuggestion($suggestions, $key, $result);
                 continue;
             }
 
-            $sld = $this->extractSld($domain, $matchedTld->tld);
-            $enomTld = $this->normalizeTldForEnom($matchedTld->tld);
+            $sld = $this->extractSld($domain, $lookupTld);
+            $enomTld = $this->normalizeTldForEnom($lookupTld);
 
             if ($sld === '' || !preg_match('/^[a-z0-9-]+$/', $sld)) {
                 $result = $this->providerUnknown('Invalid domain name. SLD sent: ' . $sld, 'local');
@@ -702,7 +760,7 @@ class DomainLookupController extends Controller
                     $result = $this->providerUnknown('Missing ENOM_API_URL, ENOM_UID, or ENOM_PASSWORD in .env/config. ' . ($result['rrpText'] ?? ''), $result['provider'] ?? 'enom');
                 }
 
-                Cache::put($requestData['cache_key'], $result, now()->addMinutes($this->availabilityCacheMinutes));
+                $this->rememberAvailabilityResult($requestData['cache_key'], $result);
                 $this->applyAvailabilityResultToSuggestion($suggestions, $key, $result);
             }
 
@@ -718,7 +776,7 @@ class DomainLookupController extends Controller
                     $result = $this->providerUnknown('eNom credentials are still placeholders. Replace resellid/resellpw with your real eNom test credentials. ' . ($result['rrpText'] ?? ''), $result['provider'] ?? 'enom');
                 }
 
-                Cache::put($requestData['cache_key'], $result, now()->addMinutes($this->availabilityCacheMinutes));
+                $this->rememberAvailabilityResult($requestData['cache_key'], $result);
                 $this->applyAvailabilityResultToSuggestion($suggestions, $key, $result);
             }
 
@@ -772,7 +830,7 @@ class DomainLookupController extends Controller
 
                 $result = $this->fallbackToWebnicIfNeeded($requestData['domain'], $result);
 
-                Cache::put($requestData['cache_key'], $result, now()->addMinutes($this->availabilityCacheMinutes));
+                $this->rememberAvailabilityResult($requestData['cache_key'], $result);
                 $this->applyAvailabilityResultToSuggestion($suggestions, $key, $result);
             }
         } catch (\Throwable $e) {
@@ -780,7 +838,7 @@ class DomainLookupController extends Controller
                 $result = $this->enomUnknown(get_class($e) . ': ' . $e->getMessage() . ' TLD sent: ' . $requestData['tld']);
                 $result = $this->fallbackToWebnicIfNeeded($requestData['domain'], $result);
 
-                Cache::put($requestData['cache_key'], $result, now()->addMinutes($this->availabilityCacheMinutes));
+                $this->rememberAvailabilityResult($requestData['cache_key'], $result);
                 $this->applyAvailabilityResultToSuggestion($suggestions, $key, $result);
             }
         }
@@ -825,14 +883,14 @@ class DomainLookupController extends Controller
     private function checkEnomAvailability(string $domain): array
     {
         $domain = $this->cleanDomain($domain);
-        $matchedTld = $this->findMatchingTld($domain);
+        $lookupTld = $this->resolveLookupTld($domain);
 
-        if (!$matchedTld) {
-            return $this->enomUnknown('Unsupported domain extension in your local database.');
+        if (!$lookupTld) {
+            return $this->enomUnknown('Could not determine domain extension.');
         }
 
-        $sld = $this->extractSld($domain, $matchedTld->tld);
-        $enomTld = $this->normalizeTldForEnom($matchedTld->tld);
+        $sld = $this->extractSld($domain, $lookupTld);
+        $enomTld = $this->normalizeTldForEnom($lookupTld);
 
         if ($sld === '' || !preg_match('/^[a-z0-9-]+$/', $sld)) {
             return $this->enomUnknown('Invalid domain name. SLD sent: ' . $sld);
@@ -1121,10 +1179,9 @@ class DomainLookupController extends Controller
     private function checkWebnicAvailability(string $domain): array
     {
         $domain = $this->cleanDomain($domain);
-        $matchedTld = $this->findMatchingTld($domain);
 
-        if (!$matchedTld) {
-            return $this->webnicUnknown('Unsupported domain extension in your local database.');
+        if (!str_contains($domain, '.')) {
+            return $this->webnicUnknown('Could not determine domain extension.');
         }
 
         $endpoint = $this->webnicEndpoint();
