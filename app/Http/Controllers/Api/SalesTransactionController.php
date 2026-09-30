@@ -413,15 +413,21 @@ class SalesTransactionController extends Controller
         ]);
 
         if ($salesTransaction->customer_id) {
-            CustomerNotification::create([
-                'customer_id' => $salesTransaction->customer_id,
-                'title' => 'Proposal Quotation Ready',
-                'body' => 'A proposal quotation for '
-                    . $salesTransaction->transaction_no
-                    . ' is ready to review. Download it, sign it, and re-upload the signed copy.',
-                'type' => 'billing',
-                'action_url' => '/public/dashboard?tab=billing',
-            ]);
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $salesTransaction->customer_id,
+                    'reference_key' => 'webdesign-proposal:'.$salesTransaction->id,
+                ],
+                [
+                    'title' => 'Proposal Quotation Ready',
+                    'body' => 'A proposal quotation for '
+                        . $salesTransaction->transaction_no
+                        . ' is ready to review. Download it, sign it, and re-upload the signed copy.',
+                    'type' => 'billing',
+                    'action_url' => '/public/dashboard?tab=billing',
+                    'read_at' => null,
+                ]
+            );
         }
 
         return response()->json([

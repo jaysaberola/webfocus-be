@@ -66,6 +66,50 @@ class WebDesignMetaTest extends TestCase
         $this->assertSame(0.0, (float) $mapped[2]['price']);
     }
 
+    public function test_drops_duplicate_hosting_rows_that_repeat_included_services(): void
+    {
+        $items = [
+            [
+                'id' => 1,
+                'name' => 'Custom Web Design',
+                'detail' => 'Business Starter Launch',
+                'itemType' => 'web_design',
+                'price' => 1000,
+                'total' => 1000,
+            ],
+            [
+                'id' => 2,
+                'name' => 'Hosting',
+                'detail' => 'Dashboard',
+                'itemType' => 'service',
+                'price' => 12,
+                'total' => 12,
+            ],
+            [
+                'id' => 3,
+                'name' => 'Hosting',
+                'detail' => 'Pop up Message/Advisory',
+                'itemType' => 'service',
+                'price' => 22,
+                'total' => 22,
+            ],
+        ];
+
+        $mapped = WebDesignMeta::foldIntoPackage(
+            $items,
+            '[WEBDESIGN_META]{"serviceFeatures":["Dashboard","Pop up Message/Advisory"]}'
+        );
+
+        $this->assertCount(3, $mapped);
+        $this->assertSame('Custom Web Design', $mapped[0]['name']);
+        $this->assertSame('Dashboard', $mapped[1]['name']);
+        $this->assertTrue($mapped[1]['included']);
+        $this->assertSame(12.0, (float) $mapped[1]['price']);
+        $this->assertSame('Pop up Message/Advisory', $mapped[2]['name']);
+        $this->assertTrue($mapped[2]['included']);
+        $this->assertSame(22.0, (float) $mapped[2]['price']);
+    }
+
     public function test_attaches_client_notes_from_the_notes_block(): void
     {
         $items = [

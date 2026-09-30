@@ -646,7 +646,7 @@ class CustomerPortalController extends Controller
             $key = (string) $row->reference_key;
             if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
                 $serviceIds[] = (int) $match[1];
-            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|webdesign-quotation(?:-priced|-reply)?:)(\d+)$/', $key, $match)) {
+            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|webdesign-quotation(?:-priced|-reply)?:|webdesign-proposal:)(\d+)$/', $key, $match)) {
                 $transactionIds[] = (int) $match[1];
             }
             if (preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)) {
@@ -664,14 +664,14 @@ class CustomerPortalController extends Controller
         $transactions = $transactionIds === []
             ? collect()
             : SalesTransaction::query()
-                ->with('items')
+                ->with(['items', 'proposals'])
                 ->where('customer_id', $customer->id)
                 ->whereIn('id', $transactionIds)
                 ->get()
                 ->keyBy('id');
         if ($transactionNos !== []) {
             $byNo = SalesTransaction::query()
-                ->with('items')
+                ->with(['items', 'proposals'])
                 ->where('customer_id', $customer->id)
                 ->whereIn('transaction_no', array_values(array_unique($transactionNos)))
                 ->get()
@@ -978,7 +978,7 @@ class CustomerPortalController extends Controller
                 $transaction = SalesTransaction::query()
                     ->where('customer_id', $customer->id)
                     ->where('transaction_no', $transactionNo)
-                    ->with('items')
+                    ->with(['items', 'proposals'])
                     ->first();
 
                 if (!$transaction) {
@@ -1444,6 +1444,7 @@ class CustomerPortalController extends Controller
         $desc = (string) $row->body;
         $details = [];
         $attachments = [];
+        $proposalSign = null;
 
         if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
             $service = $services->get((int) $match[1]);
@@ -1487,6 +1488,29 @@ class CustomerPortalController extends Controller
                     ]));
                 }
             }
+        }
+
+        $proposalOrder = $this->proposalNoticeOrder($row, $transactions);
+        if ($proposalOrder && $details === []) {
+            $signed = WebDesignQuotation::hasMarker($proposalOrder, WebDesignQuotation::PROPOSAL_SIGNED);
+            $canUpload = WebDesignQuotation::hasMarker($proposalOrder, WebDesignQuotation::PROPOSAL_SUBMITTED)
+                && ! WebDesignQuotation::isPaymentRequested($proposalOrder);
+            $intro = 'A proposal quotation for '
+                .$proposalOrder->transaction_no
+                .' is ready to review. Open the attachment, sign it, and upload the signed copy here.';
+            $desc = $intro;
+            $details = $this->portalInboxDetails([
+                'Order No' => $proposalOrder->transaction_no,
+                'Invoice' => $this->invoiceId($proposalOrder),
+                'Status' => $signed ? 'Signed copy uploaded' : 'Waiting for your signed copy',
+                'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+            ]);
+            $attachments = $this->proposalNoticeAttachments($proposalOrder);
+            $proposalSign = [
+                'invoiceId' => $this->invoiceId($proposalOrder),
+                'canUpload' => $canUpload,
+                'signed' => $signed,
+            ];
         }
 
         if ($details === []) {
@@ -1627,7 +1651,55 @@ class CustomerPortalController extends Controller
             'fromEmail' => null,
             'attachments' => array_values(array_filter($attachments)),
             'details' => $details,
+            'proposalSign' => $proposalSign,
         ];
+    }
+
+    private function proposalNoticeOrder(CustomerNotification $row, $transactions): ?SalesTransaction
+    {
+        $key = (string) $row->reference_key;
+        if (preg_match('/^webdesign-proposal:(\d+)$/', $key, $match)) {
+            $order = $transactions->get((int) $match[1]);
+
+            return $order instanceof SalesTransaction ? $order : null;
+        }
+
+        $title = strtolower((string) $row->title);
+        if (! str_contains($title, 'proposal quotation')) {
+            return null;
+        }
+        if (! preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)) {
+            return null;
+        }
+
+        $order = $transactions->firstWhere('transaction_no', $match[1]);
+
+        return $order instanceof SalesTransaction ? $order : null;
+    }
+
+    /**
+     * @return list<array{name: string, url: string|null}>
+     */
+    private function proposalNoticeAttachments(SalesTransaction $order): array
+    {
+        $proposals = $order->relationLoaded('proposals')
+            ? $order->proposals
+            : $order->proposals()->get();
+        $attachments = [];
+        foreach ($proposals->sortBy('id') as $proposal) {
+            $url = StorageUrl::publicAsset($proposal->file_path);
+            if (! $url) {
+                continue;
+            }
+            $kind = strtolower((string) $proposal->kind) === 'signed' ? 'Signed copy' : 'Proposal quotation';
+            $fileName = trim((string) ($proposal->file_name ?: basename((string) $proposal->file_path)));
+            $attachments[] = [
+                'name' => $fileName !== '' ? $kind.' — '.$fileName : $kind,
+                'url' => $url,
+            ];
+        }
+
+        return $attachments;
     }
 
     private function mapPaymentProof(CustomerPaymentProof $proof): array

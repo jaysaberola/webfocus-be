@@ -223,6 +223,40 @@ class WebDesignMeta
         }
 
         $extras = self::uniqueLabels($extras);
+        $extraLookup = [];
+        foreach ($extras as $label) {
+            $key = strtolower($label);
+            if ($key !== '') {
+                $extraLookup[$key] = $label;
+            }
+        }
+
+        if ($extraLookup !== []) {
+            $kept = [];
+            foreach ($folded as $item) {
+                if (self::isWebDesignItem($item)) {
+                    $kept[] = $item;
+                    continue;
+                }
+                $detailKey = strtolower(trim((string) ($item['detail'] ?? '')));
+                $nameKey = strtolower(trim((string) ($item['name'] ?? '')));
+                $matched = $extraLookup[$detailKey] ?? $extraLookup[$nameKey] ?? null;
+                if ($matched !== null) {
+                    $addonByName[strtolower($matched)] ??= $item;
+                    continue;
+                }
+                $kept[] = $item;
+            }
+            $folded = array_values($kept);
+        }
+
+        $packageIndex = null;
+        foreach ($folded as $index => $item) {
+            if (self::isWebDesignItem($item)) {
+                $packageIndex = $index;
+                break;
+            }
+        }
         if ($packageIndex === null && $folded !== []) {
             $packageIndex = 0;
         }
