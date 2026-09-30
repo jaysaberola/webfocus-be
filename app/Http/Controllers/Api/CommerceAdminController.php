@@ -681,7 +681,7 @@ class CommerceAdminController extends Controller
                 $ticketIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
-            } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed):(\d+)$/', $key, $m)) {
+            } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed|priced):(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
             }
         }
@@ -1168,6 +1168,9 @@ class CommerceAdminController extends Controller
         if (str_contains($url, 'tab=invoices') || str_contains($url, 'tab=billing') || $kind === 'billing') {
             return 'Open Billing';
         }
+        if ($kind === 'web_design_quotation') {
+            return 'Open Pending Quotation';
+        }
 
         return 'Open Deals';
     }
@@ -1189,6 +1192,75 @@ class CommerceAdminController extends Controller
         return $rows;
     }
 
+    /**
+     * @return array{status: string, actionLabel: string, uploadProposal: bool, setPrice: bool, proceedPayment: bool}
+     */
+    private function webDesignQuotationActions(SalesTransaction $order): array
+    {
+        $needsProposal = ! WebDesignQuotation::hasMarker($order, WebDesignQuotation::PROPOSAL_SUBMITTED);
+        $proposalSigned = WebDesignQuotation::hasMarker($order, WebDesignQuotation::PROPOSAL_SIGNED);
+        $priced = (float) $order->grand_total > 0;
+
+        if ($proposalSigned && $priced) {
+            $status = 'Proceed Payment';
+        } elseif ($proposalSigned) {
+            $status = 'Set Price';
+        } elseif (! $needsProposal) {
+            $status = 'Awaiting Signature';
+        } else {
+            $status = 'Pending Quotation';
+        }
+
+        return [
+            'status' => $status,
+            'actionLabel' => 'Open Pending Quotation',
+            'uploadProposal' => $needsProposal,
+            'setPrice' => ! $priced,
+            'proceedPayment' => $proposalSigned && $priced,
+        ];
+    }
+
+    /**
+     * @return list<array{label: string, value: string}>
+     */
+    private function webDesignQuotationDetails(
+        SalesTransaction $order,
+        ?string $fromName,
+        ?string $fromEmail,
+        array $actions,
+        mixed $submittedAt = null,
+    ): array {
+        $itemNames = WebDesignMeta::packageItemLine($order->items, $order->notes);
+        $inboxFields = WebDesignMeta::inboxFields($order->notes);
+        $details = $this->inboxDetails([
+            'Client' => $fromName,
+            'Email' => $fromEmail,
+            'Order No' => $order->transaction_no,
+        ]);
+        $lineRows = WebDesignMeta::amountDetailRows($order->items, $order->notes);
+        if ($lineRows === []) {
+            $details = array_merge($details, $this->inboxDetails([
+                'Items' => $itemNames,
+            ]));
+            foreach (WebDesignMeta::additionalServices($order->notes) as $feature) {
+                $details[] = [
+                    'label' => 'Included service',
+                    'value' => $feature,
+                ];
+            }
+        } else {
+            $details = array_merge($details, $lineRows);
+        }
+
+        return array_merge($details, $this->inboxDetails([
+            'Notes' => $inboxFields['Notes'],
+            'Sales reply' => $inboxFields['Sales reply'] ?? '',
+            'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($order)),
+            'Status' => $actions['status'],
+            'Submitted' => $this->formatAppDateTime($submittedAt ?? $order->created_at ?? $order->transacted_at),
+        ]));
+    }
+
     private function formatInboxMoney($amount): string
     {
         return '₱' . number_format((float) $amount, 2);
@@ -1204,6 +1276,7 @@ class CommerceAdminController extends Controller
             str_starts_with($referenceKey, 'admin:webdesign-quotation:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-signed:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-assigned:') => 'web_design_quotation',
+            str_starts_with($referenceKey, 'admin:webdesign-priced:') => 'web_design_quotation',
             default => (string) ($row->type ?: 'general'),
         };
 
@@ -1211,7 +1284,7 @@ class CommerceAdminController extends Controller
             'payment_proof' => 'Pending Review',
             'profile_change' => 'Pending Review',
             'support_ticket' => 'Open',
-            'web_design_quotation' => 'Needs Pricing',
+            'web_design_quotation' => 'Pending Quotation',
             default => 'Unread',
         };
 
@@ -1223,6 +1296,7 @@ class CommerceAdminController extends Controller
         $desc = (string) $row->body;
         $transactionNo = null;
         $referenceId = null;
+        $quotationActions = null;
 
         if (preg_match('/^admin:payment-proof:(\d+)$/', $referenceKey, $match)) {
             $proof = $proofs->get((int) $match[1]);
@@ -1331,30 +1405,32 @@ class CommerceAdminController extends Controller
                     'Cancelled' => $this->formatAppDateTime($row->created_at),
                 ]);
             }
-        } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed):(\d+)$/', $referenceKey, $match)) {
+        } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed|priced):(\d+)$/', $referenceKey, $match)) {
             $order = $orders->get((int) $match[1]);
             if ($order) {
                 $customer = $order->customer;
                 $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
                 $fromEmail = $customer?->email ?: $order->customer_email;
                 $transactionNo = $order->transaction_no;
-                $itemNames = WebDesignMeta::packageItemLine($order->items, $order->notes);
-                $inboxFields = WebDesignMeta::inboxFields($order->notes);
+                $referenceId = (int) $order->id;
                 $preview = WebDesignMeta::inboxPreviewSuffix($order->notes);
                 if ($preview !== '' && ! str_contains($desc, 'Notes:')) {
                     $desc .= $preview;
                 }
-                $details = $this->inboxDetails([
-                    'Client' => $fromName,
-                    'Email' => $fromEmail,
-                    'Order No' => $order->transaction_no,
-                    'Items' => $itemNames,
-                    'Included services' => $inboxFields['Included services'],
-                    'Notes' => $inboxFields['Notes'],
-                    'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($order)),
-                    'Status' => $status,
-                    'Submitted' => $this->formatAppDateTime($row->created_at),
-                ]);
+                $actions = $this->webDesignQuotationActions($order);
+                $status = $actions['status'];
+                $quotationActions = [
+                    'uploadProposal' => $actions['uploadProposal'],
+                    'setPrice' => $actions['setPrice'],
+                    'proceedPayment' => $actions['proceedPayment'],
+                ];
+                $details = $this->webDesignQuotationDetails(
+                    $order,
+                    $fromName,
+                    $fromEmail,
+                    $actions,
+                    $row->created_at,
+                );
             }
         } elseif ($kind === 'billing') {
             $intro = $row->body ?: 'A client deleted one or more invoices from their billing list.';
@@ -1403,6 +1479,7 @@ class CommerceAdminController extends Controller
             'attachments' => $attachments,
             'details' => $details,
             'actionLabel' => $this->inboxActionLabel($kind, $actionUrl),
+            'quotationActions' => $quotationActions,
         ];
     }
 
@@ -1414,14 +1491,12 @@ class CommerceAdminController extends Controller
                 ? (string) $customer->mname
                 : ($customer?->full_name ?? 'Client')));
         $itemNames = WebDesignMeta::packageItemLine($row->items, $row->notes);
-        $inboxFields = WebDesignMeta::inboxFields($row->notes);
-
-        $needsProposal = ! WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SUBMITTED);
-        $needsProceed = WebDesignQuotation::hasMarker($row, WebDesignQuotation::PROPOSAL_SIGNED);
+        $actions = $this->webDesignQuotationActions($row);
+        $needsProposal = $actions['uploadProposal'];
+        $needsProceed = $actions['proceedPayment'];
         $title = $needsProceed
             ? 'Proceed Payment — signed proposal received'
             : ($needsProposal ? 'Upload Proposal Quotation' : 'Waiting for client to sign proposal');
-        $status = $needsProceed ? 'Proceed Payment' : ($needsProposal ? 'Upload Proposal' : 'Awaiting Signature');
 
         return [
             'id' => (int) $row->id,
@@ -1440,7 +1515,7 @@ class CommerceAdminController extends Controller
             'audience' => $client,
             'email' => $row->customer_email ?: ($customer?->email),
             'transactionNo' => $row->transaction_no,
-            'status' => $status,
+            'status' => $actions['status'],
             'actionUrl' => '/public/commerce-admin?tab=orders',
             'createdAt' => optional($row->created_at ?? $row->transacted_at)?->toIso8601String(),
             'unread' => false,
@@ -1448,18 +1523,19 @@ class CommerceAdminController extends Controller
             'fromName' => $client,
             'fromEmail' => $row->customer_email ?: ($customer?->email),
             'attachments' => [],
-            'details' => $this->inboxDetails([
-                'Client' => $client,
-                'Email' => $row->customer_email ?: ($customer?->email),
-                'Order No' => $row->transaction_no,
-                'Items' => $itemNames,
-                'Included services' => $inboxFields['Included services'],
-                'Notes' => $inboxFields['Notes'],
-                'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($row)),
-                'Status' => $status,
-                'Payment Status' => $row->payment_status,
-            ]),
-            'actionLabel' => 'Open Deals',
+            'details' => $this->webDesignQuotationDetails(
+                $row,
+                $client,
+                $row->customer_email ?: ($customer?->email),
+                $actions,
+            ),
+            'actionLabel' => $actions['actionLabel'],
+            'referenceId' => (int) $row->id,
+            'quotationActions' => [
+                'uploadProposal' => $actions['uploadProposal'],
+                'setPrice' => $actions['setPrice'],
+                'proceedPayment' => $actions['proceedPayment'],
+            ],
         ];
     }
 
@@ -1495,7 +1571,10 @@ class CommerceAdminController extends Controller
                         ->orWhere('type', '!=', 'web_design_quotation');
                 })->where(function ($inner) {
                     $inner->whereNull('reference_key')
-                        ->orWhere('reference_key', 'not like', 'admin:webdesign-quotation:%');
+                        ->orWhere(function ($keys) {
+                            $keys->where('reference_key', 'not like', 'admin:webdesign-quotation:%')
+                                ->where('reference_key', 'not like', 'admin:webdesign-priced:%');
+                        });
                 });
             });
     }

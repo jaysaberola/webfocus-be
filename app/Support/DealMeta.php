@@ -92,11 +92,20 @@ class DealMeta
     {
         $discounts = self::amountMap($row->notes, 'dealDiscounts');
         $taxes = self::amountMap($row->notes, 'dealTaxes');
+        $amounts = self::amountMap($row->notes, 'dealAmounts');
         $next = [];
 
         foreach ($items as $item) {
             $detail = trim((string) ($item['detail'] ?? ''));
             $name = trim((string) ($item['name'] ?? ''));
+            $quoted = self::amountFor($amounts, $detail, $name);
+            $current = (float) ($item['total'] ?? $item['price'] ?? 0);
+            if ($quoted > 0 && $current <= 0) {
+                $quantity = max(1.0, (float) ($item['quantity'] ?? 1));
+                $item['unitPrice'] = $quoted;
+                $item['price'] = round($quoted * $quantity, 2);
+                $item['total'] = round($quoted * $quantity, 2);
+            }
             $item['discount'] = self::amountFor($discounts, $detail, $name);
             $item['tax'] = self::amountFor($taxes, $detail, $name);
             $next[] = $item;

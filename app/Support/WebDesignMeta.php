@@ -81,14 +81,20 @@ class WebDesignMeta
         return trim(implode("\n", $collected));
     }
 
+    public static function salesNotes(?string $notes): string
+    {
+        return trim((string) (self::parse($notes)['salesNotes'] ?? ''));
+    }
+
     /**
-     * @return array{Included services: string, Notes: string}
+     * @return array{Included services: string, Notes: string, Sales reply: string}
      */
     public static function inboxFields(?string $notes): array
     {
         return [
             'Included services' => implode(', ', self::additionalServices($notes)),
             'Notes' => self::clientNotes($notes),
+            'Sales reply' => self::salesNotes($notes),
         ];
     }
 
@@ -101,6 +107,9 @@ class WebDesignMeta
         }
         if ($fields['Notes'] !== '') {
             $bits[] = 'Notes: '.$fields['Notes'];
+        }
+        if (($fields['Sales reply'] ?? '') !== '') {
+            $bits[] = 'Sales reply: '.$fields['Sales reply'];
         }
 
         return $bits === [] ? '' : ' '.implode('. ', $bits).'.';
@@ -179,7 +188,7 @@ class WebDesignMeta
     }
 
     /**
-     * Keep extras under the Custom Web Design package so they share one price.
+     * Keep extras under the Custom Web Design package as their own priced rows.
      *
      * @param  array<int, array<string, mixed>>  $items
      * @return array<int, array<string, mixed>>
@@ -188,14 +197,20 @@ class WebDesignMeta
     {
         $extras = self::additionalServices($notes);
         $clientNotes = self::clientNotes($notes);
+        $salesNotes = self::salesNotes($notes);
         $folded = [];
         $packageIndex = null;
+        $addonByName = [];
 
         foreach ($items as $item) {
             if (self::isAddonItem($item)) {
                 $label = trim((string) ($item['detail'] ?? ''));
+                if ($label === '' || strcasecmp($label, 'additional service') === 0) {
+                    $label = trim((string) ($item['name'] ?? ''));
+                }
                 if ($label !== '' && strcasecmp($label, 'additional service') !== 0) {
                     $extras[] = $label;
+                    $addonByName[strtolower($label)] = $item;
                 }
                 continue;
             }
@@ -208,24 +223,106 @@ class WebDesignMeta
         }
 
         $extras = self::uniqueLabels($extras);
-        if ($extras === [] && $clientNotes === '') {
-            return $folded;
-        }
-
         if ($packageIndex === null && $folded !== []) {
             $packageIndex = 0;
         }
 
-        if ($packageIndex !== null) {
-            if ($extras !== []) {
-                $folded[$packageIndex]['additionalServices'] = $extras;
+        if ($packageIndex !== null && $clientNotes !== '') {
+            $folded[$packageIndex]['clientNotes'] = $clientNotes;
+        }
+        if ($packageIndex !== null && $salesNotes !== '') {
+            $folded[$packageIndex]['salesNotes'] = $salesNotes;
+        }
+
+        if ($extras === [] || $packageIndex === null) {
+            return $folded;
+        }
+
+        $parent = $folded[$packageIndex];
+        $children = [];
+        foreach ($extras as $index => $label) {
+            $existing = $addonByName[strtolower($label)] ?? [];
+            $quantity = max(1.0, (float) ($existing['quantity'] ?? 1));
+            $amount = (float) ($existing['total'] ?? $existing['price'] ?? 0);
+            $unit = (float) ($existing['unitPrice'] ?? 0);
+            if ($unit <= 0 && $quantity > 0 && $amount > 0) {
+                $unit = round($amount / $quantity, 2);
             }
-            if ($clientNotes !== '') {
-                $folded[$packageIndex]['clientNotes'] = $clientNotes;
+            if ($amount <= 0 && $unit > 0) {
+                $amount = round($unit * $quantity, 2);
+            }
+
+            $children[] = [
+                'id' => $existing['id'] ?? ('web-addon-'.$index),
+                'name' => $label,
+                'detail' => 'Included service',
+                'itemType' => 'web_design_addon',
+                'quantity' => $quantity,
+                'unitPrice' => $unit,
+                'price' => $amount,
+                'total' => $amount,
+                'discount' => (float) ($existing['discount'] ?? 0),
+                'tax' => (float) ($existing['tax'] ?? 0),
+                'included' => true,
+                'parentId' => $parent['id'] ?? null,
+            ];
+        }
+
+        array_splice($folded, $packageIndex + 1, 0, $children);
+
+        return $folded;
+    }
+
+    /**
+     * @param  iterable<mixed>|null  $items
+     * @return list<array{label: string, value: string}>
+     */
+    public static function amountDetailRows($items, ?string $notes): array
+    {
+        $raw = [];
+        foreach ($items ?? [] as $item) {
+            if (is_object($item)) {
+                $name = trim((string) ($item->name ?? ''));
+                $total = (float) ($item->total_price ?? 0);
+                if ($total <= 0) {
+                    $total = (float) ($item->price ?? 0) * max(1, (float) ($item->quantity ?? 1));
+                }
+                $raw[] = [
+                    'name' => $name,
+                    'detail' => $name,
+                    'itemType' => (string) ($item->item_type ?? ''),
+                    'quantity' => max(1.0, (float) ($item->quantity ?? 1)),
+                    'price' => $total,
+                    'total' => $total,
+                ];
+                continue;
+            }
+            if (is_array($item)) {
+                $raw[] = $item;
             }
         }
 
-        return $folded;
+        $folded = self::foldIntoPackage($raw, $notes);
+        $amounts = DealMeta::amountMap($notes, 'dealAmounts');
+        $rows = [];
+
+        foreach ($folded as $item) {
+            $name = trim((string) ($item['name'] ?? $item['detail'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $included = ! empty($item['included']) || self::isAddonItem($item);
+            $amount = (float) ($item['total'] ?? $item['price'] ?? 0);
+            if ($amount <= 0) {
+                $amount = DealMeta::amountFor($amounts, $name, (string) ($item['detail'] ?? ''));
+            }
+            $rows[] = [
+                'label' => $included ? 'Included service' : 'Items',
+                'value' => $name.' — ₱'.number_format($amount, 2),
+            ];
+        }
+
+        return $rows;
     }
 
     /**
@@ -255,7 +352,7 @@ class WebDesignMeta
     private static function isNotesTerminator(string $line): bool
     {
         return (bool) preg_match(
-            '/^(\[WEBDESIGN_META\]|Pricing:|Notify:|Service:|Template:|Additional Services:|Items:|Submitted |Payment |Customer checkout|Web design quotation)/i',
+            '/^(\[WEBDESIGN_META\]|Pricing:|Notify:|Service:|Template:|Additional Services:|Items:|Submitted |Payment |Customer checkout|Web design quotation|Sales reply:)/i',
             $line
         );
     }

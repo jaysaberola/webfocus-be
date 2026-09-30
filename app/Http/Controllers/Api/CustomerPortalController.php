@@ -646,7 +646,7 @@ class CustomerPortalController extends Controller
             $key = (string) $row->reference_key;
             if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
                 $serviceIds[] = (int) $match[1];
-            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|webdesign-quotation:)(\d+)$/', $key, $match)) {
+            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|webdesign-quotation(?:-priced|-reply)?:)(\d+)$/', $key, $match)) {
                 $transactionIds[] = (int) $match[1];
             }
             if (preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)) {
@@ -1491,7 +1491,7 @@ class CustomerPortalController extends Controller
 
         if ($details === []) {
             $webDesignOrder = null;
-            if (preg_match('/^webdesign-quotation:(\d+)$/', $key, $match)) {
+            if (preg_match('/^webdesign-quotation(?:-priced|-reply)?:(\d+)$/', $key, $match)) {
                 $webDesignOrder = $transactions->get((int) $match[1]);
             } elseif (
                 stripos($row->title, 'web design') !== false
@@ -1503,21 +1503,47 @@ class CustomerPortalController extends Controller
             if ($webDesignOrder) {
                 $itemNames = WebDesignMeta::packageItemLine($webDesignOrder->items, $webDesignOrder->notes);
                 $inboxFields = WebDesignMeta::inboxFields($webDesignOrder->notes);
-                $intro = 'Your web design quotation request '
-                    .$webDesignOrder->transaction_no
-                    .($itemNames ? " ({$itemNames})" : '')
-                    .' was sent to Sales. Status is Pending Quotation until the proposal is ready.'
-                    .WebDesignMeta::inboxDetailSuffix($webDesignOrder->notes);
+                $pricedAmount = WebDesignQuotation::displayAmount($webDesignOrder);
+                $isReply = str_contains($key, 'webdesign-quotation-reply:');
+                $intro = $isReply
+                    ? 'Sales replied to your quotation request '
+                        .$webDesignOrder->transaction_no
+                        .($itemNames ? " ({$itemNames})" : '')
+                        .'.'
+                    : ($pricedAmount > 0
+                    ? 'Sales set quotation amounts for '
+                        .$webDesignOrder->transaction_no
+                        .($itemNames ? " ({$itemNames})" : '')
+                        .'. Status is still Pending Quotation until the proposal is signed and payment is requested.'
+                    : 'Your web design quotation request '
+                        .$webDesignOrder->transaction_no
+                        .($itemNames ? " ({$itemNames})" : '')
+                        .' was sent to Sales. Status is Pending Quotation until the proposal is ready.');
                 $desc = $intro;
                 $details = $this->portalInboxDetails([
                     'Order No' => $webDesignOrder->transaction_no,
-                    'Items' => $itemNames,
-                    'Included services' => $inboxFields['Included services'],
-                    'Notes' => $inboxFields['Notes'],
-                    'Amount' => '₱'.number_format((float) WebDesignQuotation::displayAmount($webDesignOrder), 2),
-                    'Status' => $webDesignOrder->order_status ?: $webDesignOrder->payment_status,
-                    'Received' => optional($row->created_at)->format('M j, Y g:i A'),
                 ]);
+                $lineRows = WebDesignMeta::amountDetailRows($webDesignOrder->items, $webDesignOrder->notes);
+                if ($lineRows === []) {
+                    $details = array_merge($details, $this->portalInboxDetails([
+                        'Items' => $itemNames,
+                    ]));
+                    foreach (WebDesignMeta::additionalServices($webDesignOrder->notes) as $feature) {
+                        $details[] = [
+                            'label' => 'Included service',
+                            'value' => $feature,
+                        ];
+                    }
+                } else {
+                    $details = array_merge($details, $lineRows);
+                }
+                $details = array_merge($details, $this->portalInboxDetails([
+                    'Notes' => $inboxFields['Notes'],
+                    'Sales reply' => $inboxFields['Sales reply'] ?? '',
+                    'Amount' => '₱'.number_format((float) $pricedAmount, 2),
+                    'Status' => 'Pending Quotation',
+                    'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+                ]));
             }
         }
 
@@ -1591,8 +1617,12 @@ class CustomerPortalController extends Controller
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'unread' => $row->read_at === null,
             'type' => $type,
-            'actionUrl' => $row->action_url,
-            'actionLabel' => $this->portalInboxActionLabel($row->action_url, $type),
+            'actionUrl' => str_starts_with($key, 'webdesign-quotation')
+                ? '/public/dashboard?tab=orders'
+                : $row->action_url,
+            'actionLabel' => str_starts_with($key, 'webdesign-quotation')
+                ? 'View Pending Quotation'
+                : $this->portalInboxActionLabel($row->action_url, $type),
             'fromName' => 'WebFocus',
             'fromEmail' => null,
             'attachments' => array_values(array_filter($attachments)),

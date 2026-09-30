@@ -540,6 +540,11 @@ class SalesTransactionController extends Controller
             ]);
         }
 
+        $wasPendingQuote = WebDesignQuotation::isPendingQuotation($salesTransaction)
+            && (float) $salesTransaction->grand_total <= 0;
+        $previousGrandTotal = round((float) $salesTransaction->grand_total, 2);
+        $previousSalesNotes = WebDesignMeta::salesNotes($salesTransaction->notes);
+
         $validated = $this->validatedPayload($request, $salesTransaction->id);
         $items = $validated['items'] ?? null;
         unset($validated['items']);
@@ -585,6 +590,34 @@ class SalesTransactionController extends Controller
                 ->refreshServicesFromTransaction(
                     $salesTransaction->fresh(['items'])
                 );
+        }
+
+        $fresh = $salesTransaction->fresh(['items']);
+        if (
+            $wasPendingQuote
+            && $fresh
+            && $fresh->customer_id
+            && WebDesignQuotation::displayAmount($fresh) > 0
+        ) {
+            $this->notifyCustomerQuotationPriced($fresh);
+        }
+        $pricedAmount = $fresh ? WebDesignQuotation::displayAmount($fresh) : 0.0;
+        if (
+            $fresh
+            && WebDesignQuotation::isWebDesign($fresh)
+            && $pricedAmount > 0
+            && abs($pricedAmount - $previousGrandTotal) >= 0.01
+        ) {
+            $actor = $request->user();
+            $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? '')));
+            $this->notifyAdminQuotationPriced($fresh, $actorName !== '' ? $actorName : 'Sales');
+        }
+        if (
+            $fresh
+            && $fresh->customer_id
+            && WebDesignQuotation::isWebDesign($fresh)
+        ) {
+            $this->notifyCustomerQuotationReply($fresh, $previousSalesNotes);
         }
 
         return response()->json([
@@ -949,5 +982,108 @@ class SalesTransactionController extends Controller
         } catch (Throwable $exception) {
             report($exception);
         }
+    }
+
+    private function notifyCustomerQuotationPriced(SalesTransaction $transaction): void
+    {
+        if (! $transaction->customer_id) {
+            return;
+        }
+
+        $transaction->loadMissing(['items']);
+        $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes);
+        $amount = WebDesignQuotation::displayAmount($transaction);
+        $lines = WebDesignMeta::amountDetailRows($transaction->items, $transaction->notes);
+        $lineText = collect($lines)
+            ->map(fn (array $row) => $row['value'] ?? '')
+            ->filter()
+            ->implode('; ');
+
+        CustomerNotification::query()->updateOrCreate(
+            [
+                'customer_id' => $transaction->customer_id,
+                'reference_key' => 'webdesign-quotation-priced:'.$transaction->id,
+            ],
+            [
+                'title' => 'Web Design Quotation Amount Set',
+                'body' => 'Sales set the quotation amounts for '
+                    . $transaction->transaction_no
+                    . ($itemNames ? " ({$itemNames})" : '')
+                    . '. Grand total is ₱'
+                    . number_format($amount, 2)
+                    . ($lineText !== '' ? '. '.$lineText : '')
+                    . '. Status is still Pending Quotation until the proposal is signed and payment is requested.',
+                'type' => 'order',
+                'action_url' => '/public/dashboard?tab=orders',
+                'read_at' => null,
+            ]
+        );
+    }
+
+    private function notifyAdminQuotationPriced(SalesTransaction $transaction, string $actorName): void
+    {
+        $transaction->loadMissing(['items']);
+        $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes);
+        $amount = WebDesignQuotation::displayAmount($transaction);
+        $lines = WebDesignMeta::amountDetailRows($transaction->items, $transaction->notes);
+        $lineText = collect($lines)
+            ->map(fn (array $row) => $row['value'] ?? '')
+            ->filter()
+            ->implode('; ');
+        $clientLabel = trim((string) ($transaction->customer_name ?: 'Client'));
+
+        $body = $actorName.' set the quotation amount for '
+            .$transaction->transaction_no
+            .($clientLabel !== '' ? " ({$clientLabel})" : '')
+            .($itemNames ? " · {$itemNames}" : '')
+            .'. Grand total is ₱'
+            .number_format($amount, 2)
+            .($lineText !== '' ? '. '.$lineText : '')
+            .'. Saved for reference.';
+
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            $transaction->customer_id ? (int) $transaction->customer_id : null,
+            ['sales_admin', 'admin', 'customer_care', 'sales_staff'],
+            'admin:webdesign-priced:'.$transaction->id,
+            'Quotation amount set',
+            $body,
+            'web_design_quotation',
+            '/public/commerce-admin?tab=orders',
+            false,
+        );
+    }
+
+    private function notifyCustomerQuotationReply(SalesTransaction $transaction, string $previousSalesNotes): void
+    {
+        if (! $transaction->customer_id) {
+            return;
+        }
+
+        $transaction->loadMissing(['items']);
+        $salesNotes = WebDesignMeta::salesNotes($transaction->notes);
+        if ($salesNotes === '' || $salesNotes === $previousSalesNotes) {
+            return;
+        }
+
+        $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes);
+        $clientNotes = WebDesignMeta::clientNotes($transaction->notes);
+
+        CustomerNotification::query()->updateOrCreate(
+            [
+                'customer_id' => $transaction->customer_id,
+                'reference_key' => 'webdesign-quotation-reply:'.$transaction->id,
+            ],
+            [
+                'title' => 'Sales replied to your quotation',
+                'body' => 'Sales replied to quotation '
+                    . $transaction->transaction_no
+                    . ($itemNames ? " ({$itemNames})" : '')
+                    . ($clientNotes !== '' ? '. Your notes: '.$clientNotes : '')
+                    . '. Reply: '.$salesNotes,
+                'type' => 'order',
+                'action_url' => '/public/dashboard?tab=orders',
+                'read_at' => null,
+            ]
+        );
     }
 }

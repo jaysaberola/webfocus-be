@@ -59,4 +59,35 @@ class DealMetaLineAdjustmentsTest extends TestCase
         $this->assertSame(360.0, $priced['items'][0]['tax']);
         $this->assertSame(360.0, $priced['taxTotal']);
     }
+
+    public function test_applies_deal_amount_to_unpriced_included_service(): void
+    {
+        $row = new SalesTransaction();
+        $row->setAttribute('discount_total', 0);
+        $row->setAttribute('tax_total', 0);
+        $row->setAttribute(
+            'notes',
+            '[DEAL_META]{"dealAmounts":{"Dashboard":"1500","Pop up Message/Advisory":"800"}}'
+        );
+
+        $priced = DealMeta::applyLineAdjustments([
+            [
+                'name' => 'Business Starter Launch',
+                'detail' => 'Business Starter Launch',
+                'price' => 0,
+                'total' => 0,
+            ],
+            [
+                'name' => 'Dashboard',
+                'detail' => 'Included service',
+                'price' => 0,
+                'total' => 0,
+                'included' => true,
+            ],
+        ], $row);
+
+        $this->assertSame(0.0, (float) $priced['items'][0]['price']);
+        $this->assertSame(1500.0, (float) $priced['items'][1]['price']);
+        $this->assertSame(1500.0, $priced['subtotal']);
+    }
 }
