@@ -14,8 +14,6 @@ class DomainLookupController extends Controller
 {
     private int $availabilityCacheMinutes = 10;
     private int $suggestionLimit = 20;
-    private int $vendorPriceCacheHours = 6;
-    private float $domainPriceMarkupPercent = 20.0;
 
     public function index()
     {
@@ -23,97 +21,98 @@ class DomainLookupController extends Controller
     }
 
     public function check(Request $request)
-{
-    $validated = $request->validate([
-        'name' => [
-            'required',
-            'string',
-            'min:2',
-            'max:63',
-            'regex:/^(?!-)[a-z0-9-]+(?<!-)$/i',
-        ],
-        'tlds' => [
-            'nullable',
-            'array',
-            'max:10',
-        ],
-        'tlds.*' => [
-            'required',
-            'string',
-            'regex:/^\.[a-z0-9]+(?:\.[a-z0-9]+)*$/i',
-        ],
-    ]);
+    {
+        $validated = $request->validate([
+            'name' => [
+                'required',
+                'string',
+                'min:2',
+                'max:63',
+                'regex:/^(?!-)[a-z0-9-]+(?<!-)$/i',
+            ],
+            'tlds' => [
+                'nullable',
+                'array',
+                'max:10',
+            ],
+            'tlds.*' => [
+                'required',
+                'string',
+                'regex:/^\\.[a-z0-9]+(?:\\.[a-z0-9]+)*$/i',
+            ],
+        ]);
 
-    $name = strtolower(trim($validated['name']));
+        $name = strtolower(trim($validated['name']));
 
-    $requestedTlds = collect($validated['tlds'] ?? ['.com'])
-        ->map(function ($tld) {
-            return '.' . ltrim(strtolower(trim((string) $tld)), '.');
-        })
-        ->unique()
-        ->take(10)
-        ->values();
+        $requestedTlds = collect($validated['tlds'] ?? ['.com'])
+            ->map(function ($tld) {
+                return '.' . ltrim(strtolower(trim((string) $tld)), '.');
+            })
+            ->unique()
+            ->take(10)
+            ->values();
 
-    $domains = $requestedTlds
-        ->map(function (string $requestedTld) use ($name) {
-            $domain = $name . $requestedTld;
-            $matchedTld = $this->findMatchingTld($domain);
+        $domains = $requestedTlds
+            ->map(function (string $requestedTld) use ($name) {
+                $domain = $name . $requestedTld;
+                $matchedTld = $this->findMatchingTld($domain);
 
-            return [
-                'domain' => $domain,
-                'tld' => $requestedTld,
-                'database_price' => $matchedTld
-                    ? (float) ($matchedTld->category->selling_price ?? 0)
-                    : null,
-            ];
-        })
-        ->values()
-        ->toArray();
+                return [
+                    'domain' => $domain,
+                    'tld' => $requestedTld,
+                    'database_price' => $matchedTld
+                        ? ($matchedTld->category->selling_price ?? null)
+                        : null,
+                ];
+            })
+            ->values()
+            ->toArray();
 
-    /*
-     * This reuses your existing parallel eNom checks,
-     * WebNIC fallback, and availability cache.
-     */
-    $checkedDomains = $this->attachAvailabilityToSuggestionsFast($domains);
+        /*
+         * This reuses your existing parallel eNom checks,
+         * WebNIC fallback, and availability cache.
+         */
+        $checkedDomains = $this->attachAvailabilityToSuggestionsFast($domains);
 
-    $results = collect($checkedDomains)
-        ->map(fn (array $result) => $this->attachCustomerPrice($result))
-        ->map(function (array $result) {
-            return [
-                'domain' => $result['domain'],
-                'tld' => '.' . ltrim((string) $result['tld'], '.'),
-                'available' => $result['available'] ?? null,
-                'price' => isset($result['price']) ? (float) $result['price'] : null,
+        $results = collect($checkedDomains)
+            ->map(fn (array $result) => $this->attachCustomerPrice($result))
+            ->map(function (array $result) {
+                return [
+                    'domain' => $result['domain'],
+                    'tld' => '.' . ltrim((string) $result['tld'], '.'),
+                    'available' => $result['available'] ?? null,
+                    'price' => isset($result['price']) ? (float) $result['price'] : null,
 
-                // This is the selling-price currency shown to customers.
-                'currency' => 'PHP',
+                    // This is the selling-price currency shown to customers.
+                    'currency' => 'PHP',
 
-                // Optional diagnostic/provider fields
-                'provider' => $result['provider'] ?? null,
-                'premium' => (bool) ($result['premium'] ?? false),
-                'provider_currency' => $result['provider_currency'] ?? null,
-                'provider_register_price' =>
-                    $result['provider_register_price'] ?? null,
-                'price_provider' => $result['price_provider'] ?? null,
-                'exchange_rate_to_php' => $result['exchange_rate_to_php'] ?? null,
-                'markup_percent' => $result['markup_percent'] ?? null,
-                'price_source' => $result['price_source'] ?? null,
-                'pricing_error' => $result['pricing_error'] ?? null,
-                'fallback_reason' => $result['fallback_reason'] ?? null,
-                'pricing_message' => $result['pricing_message'] ?? null,
-                'local_database_match' => (bool) ($result['local_database_match'] ?? false),
-                'code' => $result['rrpCode'] ?? null,
-                'message' => $result['rrpText'] ?? null,
-            ];
-        })
-        ->values();
+                    // Optional diagnostic/provider fields
+                    'provider' => $result['provider'] ?? null,
+                    'premium' => (bool) ($result['premium'] ?? false),
+                    'provider_currency' => $result['provider_currency'] ?? null,
+                    'provider_register_price' =>
+                        $result['provider_register_price'] ?? null,
+                    'price_provider' => $result['price_provider'] ?? null,
+                    'exchange_rate_to_php' => $result['exchange_rate_to_php'] ?? null,
+                    'markup_percent' => $result['markup_percent'] ?? null,
+                    'price_source' => $result['price_source'] ?? null,
+                    'pricing_error' => $result['pricing_error'] ?? null,
+                    'fallback_reason' => $result['fallback_reason'] ?? null,
+                    'pricing_message' => $result['pricing_message'] ?? null,
+                    'local_database_match' => (bool) ($result['local_database_match'] ?? false),
+                    'code' => $result['rrpCode'] ?? null,
+                    'message' => $result['rrpText'] ?? null,
+                ];
+            })
+            ->values();
 
-    return response()->json([
-        'query' => $name,
-        'results' => $results,
-        'checked_at' => now()->toIso8601String(),
-    ]);
-}
+        return response()->json([
+            'query' => $name,
+            'results' => $results,
+            'checked_at' => now()->toIso8601String(),
+        ]);
+    }
+
 
     public function search(Request $request)
     {
@@ -123,7 +122,7 @@ class DomainLookupController extends Controller
 
         $domain = $this->cleanDomain($request->domain);
 
-        if (!preg_match('/^[a-z0-9-]+(\.[a-z0-9-]+)+$/', $domain)) {
+        if (!preg_match('/^[a-z0-9-]+(\\.[a-z0-9-]+)+$/', $domain)) {
             return back()
                 ->with('error', 'Invalid domain format. Example: example.com')
                 ->withInput();
@@ -154,7 +153,7 @@ class DomainLookupController extends Controller
         $availability = $this->attachCustomerPrice(array_merge(
             [
                 'domain' => $domain,
-                'database_price' => (float) ($matchedTld->category->selling_price ?? 0),
+                'database_price' => $matchedTld->category->selling_price ?? null,
             ],
             $availabilityResult
         ));
@@ -163,7 +162,7 @@ class DomainLookupController extends Controller
         |--------------------------------------------------------------------------
         | Suggestions
         |--------------------------------------------------------------------------
-        | Suggestions get their prices from the vendor response.
+        | Suggestions use the category selling price from the local database.
         | eNom parallel checks remain in place for speed.
         | WebNIC fallback is only called for unknown eNom results.
         */
@@ -175,7 +174,7 @@ class DomainLookupController extends Controller
             'tld' => $matchedTld,
             'category' => $matchedTld->category,
 
-            // Vendor registration cost converted to PHP, plus 20% markup.
+            // Use the database selling price directly, without markup.
             'price' => $availability['price'] ?? null,
 
             // Availability from provider/cache
@@ -201,188 +200,51 @@ class DomainLookupController extends Controller
 
     private function attachCustomerPrice(array $result): array
     {
-        // A pending local transaction already reserves this exact domain.
-        // Do not call eNom/WebNIC pricing for a domain that cannot be purchased.
-        if (($result['local_database_match'] ?? false) === true) {
-            $result['price'] = null;
-            $result['currency'] = 'PHP';
-            $result['provider_currency'] = null;
-            $result['provider_register_price'] = null;
-            $result['price_provider'] = null;
-            $result['exchange_rate_to_php'] = null;
-            $result['markup_percent'] = null;
-            $result['price_source'] = 'local_pending_transaction';
-            $result['pricing_error'] = null;
-            $result['fallback_reason'] = null;
-            $result['pricing_message'] = 'No vendor pricing lookup was made because the domain is already pending locally.';
-
-            return $result;
-        }
-
-        $domain = $this->cleanDomain((string) ($result['domain'] ?? ''));
-        $vendorPrice = $result['provider_register_price'] ?? null;
-        $vendorCurrency = strtoupper(trim((string) ($result['currency'] ?? '')));
-
-        $pricingMessages = [];
-
-        // The eNom availability command does not include a price. Request the
-        // regular reseller registration price separately and cache it by TLD.
-        if ((!is_numeric($vendorPrice) || (float) $vendorPrice <= 0 || $vendorCurrency === '') && $domain !== '') {
-            $enomPricing = $this->checkEnomRegularPriceCached(
-                (string) ($result['tld'] ?? ''),
-                $domain
-            );
-
-            if (is_numeric($enomPricing['provider_register_price'] ?? null)
-                && (float) $enomPricing['provider_register_price'] > 0
-                && trim((string) ($enomPricing['currency'] ?? '')) !== '') {
-                $vendorPrice = (float) $enomPricing['provider_register_price'];
-                $vendorCurrency = strtoupper(trim((string) $enomPricing['currency']));
-                $result['price_provider'] = 'enom';
-            } else {
-                $pricingMessages[] = $enomPricing['message'] ?? 'eNom did not return a regular registration price.';
-            }
-        }
-
-        // WebNIC can still provide the price for supported or premium domains.
-        if ((!is_numeric($vendorPrice) || (float) $vendorPrice <= 0 || $vendorCurrency === '') && $domain !== '') {
-            $vendorPricing = Cache::remember(
-                'domain_vendor_price_' . md5($domain),
-                now()->addMinutes($this->availabilityCacheMinutes),
-                fn () => $this->checkWebnicAvailability($domain)
-            );
-
-            if (is_numeric($vendorPricing['provider_register_price'] ?? null)) {
-                $vendorPrice = (float) $vendorPricing['provider_register_price'];
-                $vendorCurrency = strtoupper(trim((string) ($vendorPricing['currency'] ?? '')));
-                $result['price_provider'] = $vendorPricing['provider'] ?? 'webnic';
-                $result['premium'] = $vendorPricing['premium'] ?? $result['premium'] ?? false;
-            } else {
-                $pricingMessages[] = $vendorPricing['rrpText'] ?? 'WebNIC did not return a registration price.';
-            }
-        }
-
-        if (!is_numeric($vendorPrice) || (float) $vendorPrice <= 0 || $vendorCurrency === '') {
-            $reason = !empty($pricingMessages)
-                ? implode(' | ', array_unique(array_filter($pricingMessages)))
-                : 'The vendors did not return a valid registration price and currency.';
-
-            return $this->useDatabasePriceFallback(
-                $result,
-                $reason
-            );
-        }
-
-        $exchangeRate = $this->exchangeRateToPhp($vendorCurrency);
-
-        if ($exchangeRate === null) {
-            $result['provider_currency'] = $vendorCurrency;
-            $result['provider_register_price'] = (float) $vendorPrice;
-
-            return $this->useDatabasePriceFallback(
-                $result,
-                'Unable to retrieve the ' . $vendorCurrency . ' to PHP exchange rate.'
-            );
-        }
-
-        $markupPercent = (float) config(
-            'services.domain_lookup.price_markup_percent',
-            env('DOMAIN_PRICE_MARKUP_PERCENT', $this->domainPriceMarkupPercent)
-        );
-        $phpCost = (float) $vendorPrice * $exchangeRate;
-
-        $result['price'] = round($phpCost * (1 + ($markupPercent / 100)), 2);
+        // Preserve the response fields while ignoring all provider pricing,
+        // including pricing metadata from previously cached availability results.
+        $result['price'] = null;
         $result['currency'] = 'PHP';
-        $result['provider_currency'] = $vendorCurrency;
-        $result['provider_register_price'] = (float) $vendorPrice;
-        $result['exchange_rate_to_php'] = $exchangeRate;
-        $result['markup_percent'] = $markupPercent;
-        $result['price_source'] = 'vendor_converted_with_markup';
+        $result['provider_currency'] = null;
+        $result['provider_register_price'] = null;
+        $result['price_provider'] = null;
+        $result['exchange_rate_to_php'] = null;
+        $result['markup_percent'] = 0.0;
         $result['pricing_error'] = null;
         $result['fallback_reason'] = null;
-        $result['pricing_message'] = ($result['price_provider'] ?? 'vendor') . ' registration price used.';
 
-        return $result;
-    }
-
-    private function useDatabasePriceFallback(array $result, string $fallbackReason): array
-    {
-        $databasePrice = $result['database_price'] ?? null;
-
-        if (is_numeric($databasePrice) && (float) $databasePrice > 0) {
-            $result['price'] = round((float) $databasePrice, 2);
-            $result['currency'] = 'PHP';
-            $result['price_source'] = 'database_fallback';
-            $result['pricing_error'] = null;
-            $result['fallback_reason'] = $fallbackReason;
-            $result['pricing_message'] = 'Database selling price used because vendor pricing was unavailable.';
-            $result['markup_percent'] = null;
-            $result['exchange_rate_to_php'] = null;
+        // Preserve the reservation rule for pending local transactions.
+        if (($result['local_database_match'] ?? false) === true) {
+            $result['price_source'] = 'local_pending_transaction';
+            $result['pricing_message'] = 'Domain is already reserved by a pending local sales transaction.';
 
             return $result;
         }
 
-        $result['price'] = null;
-        $result['price_source'] = 'unavailable';
-        $result['pricing_error'] = $fallbackReason . ' No database selling price is available.';
-        $result['fallback_reason'] = $fallbackReason;
-        $result['pricing_message'] = 'No vendor or database price is available.';
-        $result['markup_percent'] = null;
-        $result['exchange_rate_to_php'] = null;
+        $databasePrice = $result['database_price'] ?? null;
+
+        if (!is_numeric($databasePrice)
+            || !is_finite((float) $databasePrice)
+            || (float) $databasePrice < 0) {
+            $result['price_source'] = 'unavailable';
+            $result['pricing_error'] = 'No valid database selling price is configured for this domain extension.';
+            $result['pricing_message'] = 'Database selling price is unavailable.';
+
+            return $result;
+        }
+
+        $result['price'] = round((float) $databasePrice, 2);
+        $result['price_provider'] = 'database';
+        $result['price_source'] = 'database';
+        $result['pricing_message'] = 'Database category selling price used without markup.';
 
         return $result;
-    }
-
-    private function exchangeRateToPhp(string $fromCurrency): ?float
-    {
-        $fromCurrency = strtoupper(trim($fromCurrency));
-
-        if ($fromCurrency === 'PHP') {
-            return 1.0;
-        }
-
-        if (!preg_match('/^[A-Z]{3}$/', $fromCurrency)) {
-            return null;
-        }
-
-        return Cache::remember('fx_rate_' . $fromCurrency . '_PHP', now()->addDay(), function () use ($fromCurrency) {
-            $baseUrl = rtrim((string) config(
-                'services.exchange_rate.url',
-                env('EXCHANGE_RATE_API_URL', 'https://open.er-api.com/v6/latest')
-            ), '/');
-
-            try {
-                $response = Http::timeout(10)
-                    ->connectTimeout(5)
-                    ->acceptJson()
-                    ->get($baseUrl . '/' . $fromCurrency);
-
-                if (!$response->successful()) {
-                    return null;
-                }
-
-                $rate = data_get($response->json(), 'rates.PHP');
-
-                return is_numeric($rate) && (float) $rate > 0
-                    ? (float) $rate
-                    : null;
-            } catch (\Throwable $e) {
-                \Log::warning('DOMAIN PRICE EXCHANGE RATE FAILED', [
-                    'from' => $fromCurrency,
-                    'to' => 'PHP',
-                    'error' => get_class($e) . ': ' . $e->getMessage(),
-                ]);
-
-                return null;
-            }
-        });
     }
 
     private function cleanDomain(string $domain): string
     {
         $domain = strtolower(trim($domain));
-        $domain = preg_replace('/^https?:\/\//', '', $domain);
-        $domain = preg_replace('/^www\./', '', $domain);
+        $domain = preg_replace('/^https?:\\/\\//', '', $domain);
+        $domain = preg_replace('/^www\\./', '', $domain);
         $domain = explode('/', $domain)[0];
         $domain = rtrim($domain, '/');
 
@@ -415,7 +277,7 @@ class DomainLookupController extends Controller
 
     private function extractSld(string $domain, string $tld): string
     {
-        return preg_replace('/\.' . preg_quote($tld, '/') . '$/', '', $domain);
+        return preg_replace('/\\.' . preg_quote($tld, '/') . '$/', '', $domain);
     }
 
     private function generateSuggestions(string $sld, string $originalDomain): array
@@ -499,8 +361,8 @@ class DomainLookupController extends Controller
             'tld' => $domainTld->tld,
             'category' => $domainTld->category->name,
 
-            // Used only when neither vendor pricing nor conversion is available.
-            'database_price' => (float) ($domainTld->category->selling_price ?? 0),
+            // All customer prices come from the database category selling price.
+            'database_price' => $domainTld->category->selling_price ?? null,
 
             'is_one_time' => $domainTld->category->is_one_time ?? false,
 
@@ -930,252 +792,6 @@ class DomainLookupController extends Controller
         }
     }
 
-    private function checkEnomRegularPriceCached(string $resultTld, string $domain): array
-    {
-        $tld = $this->normalizeTldForEnom($resultTld);
-
-        if ($tld === '') {
-            $matchedTld = $this->findMatchingTld($domain);
-            $tld = $this->normalizeTldForEnom($matchedTld->tld ?? '');
-        }
-
-        if ($tld === '') {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'Unable to determine the TLD for the eNom pricing request.',
-            ];
-        }
-
-        $url = trim((string) config('services.enom.url'));
-        $uid = trim((string) config('services.enom.uid'));
-        $cacheKey = 'enom_regular_price_' . md5($url . ':' . $uid . ':' . $tld);
-
-        return Cache::remember(
-            $cacheKey,
-            now()->addHours($this->vendorPriceCacheHours),
-            fn () => $this->checkEnomRegularPrice($tld)
-        );
-    }
-
-    private function checkEnomRegularPrice(string $tld): array
-    {
-        $url = trim((string) config('services.enom.url'));
-        $uid = trim((string) config('services.enom.uid'));
-        $password = trim((string) config('services.enom.password'));
-
-        if ($url === '' || $uid === '' || $password === '') {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'Missing ENOM_API_URL, ENOM_UID, or ENOM_PASSWORD in .env/config.',
-            ];
-        }
-
-        if ($uid === 'resellid' || $password === 'resellpw') {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'eNom credentials are still placeholders.',
-            ];
-        }
-
-        $productNames = array_values(array_unique([
-            $this->normalizeTldForEnom($tld),
-            '.' . $this->normalizeTldForEnom($tld),
-        ]));
-        $lastResult = null;
-
-        foreach ($productNames as $productName) {
-            try {
-                $response = Http::timeout(10)
-                    ->connectTimeout(5)
-                    ->get($url, [
-                        'command' => 'PE_GetProductPrice',
-                        'tld' => $this->normalizeTldForEnom($tld),
-                        'ProductType' => 10,
-                        'ProductName' => $productName,
-                        'PurchaseType' => 'register',
-                        'Quantity' => 1,
-                        'responsetype' => 'xml',
-                        'uid' => $uid,
-                        'pw' => $password,
-                    ]);
-
-                $lastResult = $this->parseEnomPriceResponse($response, $tld, $productName);
-
-                if (is_numeric($lastResult['provider_register_price'] ?? null)
-                    && (float) $lastResult['provider_register_price'] > 0) {
-                    return $lastResult;
-                }
-            } catch (\Throwable $e) {
-                $lastResult = [
-                    'provider_register_price' => null,
-                    'currency' => null,
-                    'message' => get_class($e) . ': ' . $e->getMessage() . ' TLD sent: ' . $tld,
-                ];
-            }
-        }
-
-        return $lastResult ?: [
-            'provider_register_price' => null,
-            'currency' => null,
-            'message' => 'eNom did not return a regular registration price for .' . $tld . '.',
-        ];
-    }
-
-    private function parseEnomPriceResponse($response, string $tld, string $productName): array
-    {
-        if ($response instanceof \Throwable) {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => get_class($response) . ': ' . $response->getMessage() . ' TLD sent: ' . $tld,
-            ];
-        }
-
-        if (!is_object($response) || !method_exists($response, 'successful')) {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'Unexpected eNom pricing response type: ' . get_debug_type($response) . ' TLD sent: ' . $tld,
-            ];
-        }
-
-        if (!$response->successful()) {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'HTTP ' . $response->status() . ' from eNom pricing. TLD sent: ' . $tld,
-            ];
-        }
-
-        $body = trim($response->body());
-
-        if ($body === '') {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'Empty response from eNom pricing. TLD sent: ' . $tld,
-            ];
-        }
-
-        libxml_use_internal_errors(true);
-        $xml = simplexml_load_string($body);
-
-        if (!$xml) {
-            libxml_clear_errors();
-
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => 'Invalid XML from eNom pricing. TLD sent: ' . $tld,
-            ];
-        }
-
-        $errors = [];
-        $errorNodes = $xml->xpath('//errors/*');
-
-        if ($errorNodes) {
-            foreach ($errorNodes as $errorNode) {
-                $errorText = trim((string) $errorNode);
-                if ($errorText !== '') {
-                    $errors[] = $errorText;
-                }
-            }
-        }
-
-        $price = $this->firstNumericEnomXmlValue($xml, [
-            'ProductPrice',
-            'productprice',
-            'ResellerPrice',
-            'resellerprice',
-            'RegistrationPrice',
-            'registrationprice',
-            'Price',
-            'price',
-        ]);
-
-        $currency = $this->firstEnomXmlValue($xml, [
-            'CurrencyCode',
-            'currencycode',
-            'Currency',
-            'currency',
-        ]);
-
-        if ($currency === null || !preg_match('/^[A-Za-z]{3}$/', $currency)) {
-            $currency = (string) config(
-                'services.enom.currency',
-                env('ENOM_CURRENCY', 'USD')
-            );
-        }
-
-        $currency = strtoupper(trim($currency));
-
-        if ($price === null || $price <= 0) {
-            return [
-                'provider_register_price' => null,
-                'currency' => null,
-                'message' => !empty($errors)
-                    ? 'eNom pricing error: ' . implode('; ', array_unique($errors))
-                    : 'eNom pricing returned no usable price for product ' . $productName . '.',
-            ];
-        }
-
-        return [
-            'provider_register_price' => $price,
-            'currency' => $currency,
-            'message' => 'eNom regular registration price retrieved for .' . $tld . '.',
-        ];
-    }
-
-    private function firstNumericEnomXmlValue(\SimpleXMLElement $xml, array $names): ?float
-    {
-        foreach ($names as $name) {
-            $value = $this->firstEnomXmlValue($xml, [$name]);
-
-            if ($value === null) {
-                continue;
-            }
-
-            $normalized = str_replace(',', '', trim($value));
-
-            if (preg_match('/-?\d+(?:\.\d+)?/', $normalized, $matches)) {
-                $price = (float) $matches[0];
-
-                if ($price > 0) {
-                    return $price;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private function firstEnomXmlValue(\SimpleXMLElement $xml, array $names): ?string
-    {
-        $wantedNames = array_map('strtolower', $names);
-        $nodes = $xml->xpath('//*');
-
-        if (!$nodes) {
-            return null;
-        }
-
-        foreach ($nodes as $node) {
-            if (!in_array(strtolower($node->getName()), $wantedNames, true)) {
-                continue;
-            }
-
-            $value = trim((string) $node);
-
-            if ($value !== '') {
-                return $value;
-            }
-        }
-
-        return null;
-    }
-
     private function checkWebnicAvailability(string $domain): array
     {
         $domain = $this->cleanDomain($domain);
@@ -1521,14 +1137,11 @@ class DomainLookupController extends Controller
         $available = $this->normalizeWebnicAvailableValue($availableRaw, $message);
 
         $premium = filter_var($data['premium'] ?? false, FILTER_VALIDATE_BOOLEAN);
-        $currency = $data['currency'] ?? null;
-        $registerPrice = $data['register'] ?? $data['registerPrice'] ?? null;
 
         $textParts = array_filter([
             $message,
             $status !== '' ? 'Status: ' . $status : null,
             $premium ? 'Premium domain' : null,
-            $currency && $registerPrice ? 'Provider price: ' . $currency . ' ' . $registerPrice : null,
         ]);
 
         return [
@@ -1537,8 +1150,8 @@ class DomainLookupController extends Controller
             'rrpText' => !empty($textParts) ? implode(' | ', $textParts) : 'WebNIC response parsed.',
             'provider' => 'webnic',
             'premium' => $premium,
-            'currency' => $currency,
-            'provider_register_price' => $registerPrice,
+            'currency' => null,
+            'provider_register_price' => null,
         ];
     }
 
