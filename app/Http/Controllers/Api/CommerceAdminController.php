@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
+use App\Models\ProvisioningAction;
 use App\Models\CustomerProfileChangeRequest;
 use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
@@ -18,6 +19,7 @@ use App\Support\WebDesignQuotation;
 use App\Services\ClientOwnerRotator;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\CustomerPortalProvisioner;
+use App\Services\ProvisioningWorkflow;
 use Carbon\Carbon;
 use Carbon\CarbonInterface;
 use Illuminate\Http\Request;
@@ -316,8 +318,23 @@ class CommerceAdminController extends Controller
         $this->collapseDuplicatePendingPaymentProofs();
 
         $proofRows = CustomerPaymentProof::query()
-            ->with(['customer:id,fname,lname,email', 'salesTransaction.items'])
-            ->when($status !== 'all', fn ($q) => $q->where('status', $status))
+            ->with([
+                'customer:id,fname,lname,email',
+                'salesTransaction.items',
+                'salesTransaction.provisioningRun',
+            ])
+            ->when($status === 'Pending Review', function ($query) {
+                $query->where(function ($rows) {
+                    $rows->where('status', 'Pending Review')
+                        ->orWhere(function ($open) {
+                            $open->where('status', 'Verified & Credited')
+                                ->whereHas('salesTransaction.provisioningRun', function ($run) {
+                                    $run->where('status', 'provisioning');
+                                });
+                        });
+                });
+            })
+            ->when(! in_array($status, ['all', 'Pending Review'], true), fn ($q) => $q->where('status', $status))
             ->latest()
             ->get()
             ->unique(function (CustomerPaymentProof $proof) {
@@ -328,10 +345,34 @@ class CommerceAdminController extends Controller
                 return 'pending:' . ($proof->sales_transaction_id ?: $proof->invoice_id);
             })
             ->values()
-            ->map(fn (CustomerPaymentProof $proof) => array_merge(
-                $this->mapAdminPaymentProof($proof),
-                ['kind' => 'payment_proof']
-            ));
+            ->map(function (CustomerPaymentProof $proof) use ($status) {
+                $run = $proof->salesTransaction?->provisioningRun;
+                if ($run && $run->status === 'provisioning') {
+                    app(ProvisioningWorkflow::class)->sync($run);
+                    $run->refresh();
+                    $run->loadCount([
+                        'actions',
+                        'actions as settled_actions_count' => function ($actions) {
+                            $actions->whereIn('status', ['completed', 'active']);
+                        },
+                    ]);
+                }
+
+                if (
+                    $status === 'Pending Review'
+                    && $proof->status === 'Verified & Credited'
+                    && (! $run || $run->status !== 'provisioning')
+                ) {
+                    return null;
+                }
+
+                return array_merge(
+                    $this->mapAdminPaymentProof($proof),
+                    ['kind' => 'payment_proof']
+                );
+            })
+            ->filter()
+            ->values();
 
         $profileRows = CustomerProfileChangeRequest::query()
             ->with('customer:id,fname,lname,email,mname')
@@ -377,7 +418,7 @@ class CommerceAdminController extends Controller
 
     public function verifyPaymentProof(Request $request, CustomerPaymentProof $paymentProof)
     {
-        $this->resolveStaff($request);
+        $staff = $this->resolveStaff($request);
         abort_unless($paymentProof->status === 'Pending Review', 422, 'Only pending proofs can be verified.');
 
         $paymentProof->update(['status' => 'Verified & Credited']);
@@ -394,11 +435,16 @@ class CommerceAdminController extends Controller
                 ),
             ]);
 
+            $freshTransaction = $paymentProof->salesTransaction->fresh(['items']);
             if ($paymentProof->customer_id) {
-                app(CustomerPortalProvisioner::class)->refreshServicesFromTransaction(
-                    $paymentProof->salesTransaction->fresh(['items'])
-                );
+                app(CustomerPortalProvisioner::class)->refreshServicesFromTransaction($freshTransaction);
             }
+
+            app(ProvisioningWorkflow::class)->openFromApproval(
+                $freshTransaction,
+                $staff,
+                $paymentProof->proof_no
+            );
         }
 
         if ($paymentProof->customer_id) {
@@ -415,7 +461,11 @@ class CommerceAdminController extends Controller
 
         return response()->json([
             'message' => 'Payment proof verified and invoice credited.',
-            'data' => $this->mapAdminPaymentProof($paymentProof->fresh(['customer', 'salesTransaction.items'])),
+            'data' => $this->mapAdminPaymentProof($paymentProof->fresh([
+                'customer',
+                'salesTransaction.items',
+                'salesTransaction.provisioningRun',
+            ])),
         ]);
     }
 
@@ -671,6 +721,7 @@ class CommerceAdminController extends Controller
         $profileIds = [];
         $ticketIds = [];
         $orderIds = [];
+        $actionIds = [];
         foreach ($inboxRows as $row) {
             $key = (string) $row->reference_key;
             if (preg_match('/^admin:payment-proof:(\d+)$/', $key, $m)) {
@@ -683,6 +734,8 @@ class CommerceAdminController extends Controller
                 $orderIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed|priced):(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
+            } elseif (preg_match('/^admin:provisioning-action:(\d+)$/', $key, $m)) {
+                $actionIds[] = (int) $m[1];
             }
         }
 
@@ -714,9 +767,21 @@ class CommerceAdminController extends Controller
                 ->whereIn('id', $orderIds)
                 ->get()
                 ->keyBy('id');
+        $provisioningActions = $actionIds === []
+            ? collect()
+            : ProvisioningAction::query()
+                ->with([
+                    'assignee:id,fname,lname,email',
+                    'author:id,fname,lname,email',
+                    'salesTransaction:id,transaction_no,customer_name,customer_email,customer_id',
+                    'salesTransaction.customer:id,fname,lname,email,mname',
+                ])
+                ->whereIn('id', $actionIds)
+                ->get()
+                ->keyBy('id');
 
         $inboxAlerts = $inboxRows
-            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets, $orders))
+            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets, $orders, $provisioningActions))
             ->filter(function (array $row) use ($canSeeQuotations) {
                 if (($row['kind'] ?? '') === 'web_design_quotation') {
                     return $canSeeQuotations;
@@ -972,16 +1037,22 @@ class CommerceAdminController extends Controller
         $items = $transaction?->items;
         $firstItem = $items?->first();
         $transactedAt = $transaction?->transacted_at;
+        $provisioning = $transaction?->provisioningRun
+            ? app(ProvisioningWorkflow::class)->listSummary($transaction->provisioningRun)
+            : null;
 
         return [
             'id' => $proof->id,
+            'salesTransactionId' => $transaction?->id,
             'proofNo' => $proof->proof_no,
             'invoiceId' => $proof->invoice_id,
             'client' => $company,
             'email' => $customer?->email,
             'fileName' => $proof->file_name,
             'fileUrl' => StorageUrl::publicAsset($proof->file_path),
-            'status' => $proof->status,
+            'status' => $provisioning ? 'Provisioning' : $proof->status,
+            'proofStatus' => $proof->status,
+            'provisioning' => $provisioning,
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
             'issuedDate' => TransactionLabelResolver::issuedDateFrom($transactedAt),
@@ -1159,6 +1230,9 @@ class CommerceAdminController extends Controller
     private function inboxActionLabel(string $kind, ?string $actionUrl): string
     {
         $url = (string) $actionUrl;
+        if ($kind === 'provisioning_action') {
+            return 'Open Provisioning';
+        }
         if (str_contains($url, 'tab=approvals') || in_array($kind, ['payment_proof', 'profile_change'], true)) {
             return 'Open Approvals';
         }
@@ -1266,7 +1340,7 @@ class CommerceAdminController extends Controller
         return '₱' . number_format((float) $amount, 2);
     }
 
-    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets, $orders): array
+    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets, $orders, $provisioningActions = null): array
     {
         $referenceKey = (string) $row->reference_key;
         $kind = match (true) {
@@ -1277,6 +1351,7 @@ class CommerceAdminController extends Controller
             str_starts_with($referenceKey, 'admin:webdesign-signed:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-assigned:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-priced:') => 'web_design_quotation',
+            str_starts_with($referenceKey, 'admin:provisioning-action:') => 'provisioning_action',
             default => (string) ($row->type ?: 'general'),
         };
 
@@ -1285,6 +1360,7 @@ class CommerceAdminController extends Controller
             'profile_change' => 'Pending Review',
             'support_ticket' => 'Open',
             'web_design_quotation' => 'Pending Quotation',
+            'provisioning_action' => 'Assigned',
             default => 'Unread',
         };
 
@@ -1432,6 +1508,31 @@ class CommerceAdminController extends Controller
                     $row->created_at,
                 );
             }
+        } elseif (preg_match('/^admin:provisioning-action:(\d+)$/', $referenceKey, $match)) {
+            $action = $provisioningActions?->get((int) $match[1]);
+            $status = 'Assigned';
+            if ($action) {
+                $order = $action->salesTransaction;
+                $customer = $order?->customer;
+                $fromName = $this->clientDisplayName($customer) ?: ($order?->customer_name ?: 'Client');
+                $fromEmail = $customer?->email ?: $order?->customer_email;
+                $transactionNo = $order?->transaction_no;
+                $referenceId = (int) ($order?->id ?: 0) ?: null;
+                $assigneeName = trim(($action->assignee?->fname ?? '') . ' ' . ($action->assignee?->lname ?? '')) ?: 'Unassigned';
+                $authorName = trim(($action->author?->fname ?? '') . ' ' . ($action->author?->lname ?? ''));
+                $intro = (string) $row->body;
+                $details = $this->inboxDetails([
+                    'Client' => $fromName,
+                    'Email' => $fromEmail,
+                    'Order No' => $transactionNo,
+                    'Service' => $action->service_name,
+                    'Action' => $action->description,
+                    'Assigned to' => $assigneeName,
+                    'Assigned by' => $authorName,
+                    'Checkpoint' => $action->checkpoint_hours ? $action->checkpoint_hours . ' hours' : null,
+                    'Status' => ucfirst((string) $action->status),
+                ]);
+            }
         } elseif ($kind === 'billing') {
             $intro = $row->body ?: 'A client deleted one or more invoices from their billing list.';
             $details = $this->inboxDetails([
@@ -1441,7 +1542,7 @@ class CommerceAdminController extends Controller
         }
 
         $actionUrl = $row->action_url ?: match ($kind) {
-            'payment_proof', 'profile_change' => '/public/commerce-admin?tab=approvals',
+            'payment_proof', 'profile_change', 'provisioning_action' => '/public/commerce-admin?tab=approvals',
             'support_ticket' => '/public/commerce-admin?tab=helpdesk',
             'billing' => '/public/commerce-admin?tab=billing',
             default => '/public/commerce-admin?tab=orders',

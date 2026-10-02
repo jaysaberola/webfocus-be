@@ -24,6 +24,7 @@ use App\Support\WebDesignQuotation;
 use App\Support\PhMobile;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
+use App\Services\ProvisioningWorkflow;
 use App\Services\CustomerPortalNotificationSync;
 use App\Services\PaynamicsProofScanner;
 use App\Services\PaynamicsService;
@@ -112,7 +113,13 @@ class CustomerPortalController extends Controller
 
         $orders = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with(['items', 'paynamicsPaymentReferences', 'paymentProofs'])
+            ->with([
+                'items',
+                'paynamicsPaymentReferences',
+                'paymentProofs',
+                'provisioningRun.actions.assignee:id,fname,lname,email',
+                'provisioningRun.webdevStarter:id,fname,lname,email',
+            ])
             ->latest('created_at')
             ->latest('id')
             ->get()
@@ -1302,6 +1309,7 @@ class CustomerPortalController extends Controller
             'gateway' => $this->extractPaymentMethod($row),
             'paymentDate' => RelatedPaymentSync::dateFrom($row),
             'approvedAt' => CustomerPortalProvisioner::approvedAt($row),
+            'provisioning' => app(ProvisioningWorkflow::class)->customerView($row),
             'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
             'canCheckout' => $canCheckout,
             'canCancel' => in_array($status, [

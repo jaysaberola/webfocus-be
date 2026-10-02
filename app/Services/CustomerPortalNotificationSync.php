@@ -16,7 +16,7 @@ class CustomerPortalNotificationSync
 
         $services = CustomerService::query()
             ->where('customer_id', $customerId)
-            ->with('salesTransaction')
+            ->with('salesTransaction.provisioningRun.actions')
             ->get();
 
         foreach ($services as $service) {
@@ -26,7 +26,7 @@ class CustomerPortalNotificationSync
                 $service->save();
             }
 
-            if ($status !== CustomerPortalProvisioner::STATUS_PROVISIONING) {
+            if ($status !== CustomerPortalProvisioner::STATUS_PROVISIONING || $this->technicalProvisioningFinished($service)) {
                 continue;
             }
 
@@ -39,6 +39,13 @@ class CustomerPortalNotificationSync
                 'action_url' => '/public/dashboard?tab=overview',
             ]);
         }
+
+        $services
+            ->filter(fn (CustomerService $service) => $this->technicalProvisioningFinished($service))
+            ->map(fn (CustomerService $service) => $service->salesTransaction)
+            ->filter()
+            ->unique('id')
+            ->each(fn (SalesTransaction $transaction) => $this->notifyTechnicalProvisioningCompleted($transaction));
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customerId)
@@ -90,6 +97,7 @@ class CustomerPortalNotificationSync
         $provisioning = $services->filter(
             fn (CustomerService $service) => CustomerPortalProvisioner::resolveStatusForService($service)
                 === CustomerPortalProvisioner::STATUS_PROVISIONING
+                && ! $this->technicalProvisioningFinished($service)
         );
         $unpaid = $this->unpaidTransactions($transactions);
 
@@ -165,6 +173,40 @@ class CustomerPortalNotificationSync
             . '. Complete payment to start provisioning.';
     }
 
+    public function notifyTechnicalProvisioningCompleted(SalesTransaction $transaction): void
+    {
+        if (! $transaction->customer_id) {
+            return;
+        }
+
+        $transaction->loadMissing('items');
+        $names = $transaction->items->pluck('name')->filter()->take(4)->implode(', ');
+        $orderNo = $transaction->transaction_no ?: ('Order ' . $transaction->id);
+        $this->upsert((int) $transaction->customer_id, 'order-provisioned:' . $transaction->id, [
+            'title' => 'Technical provisioning completed',
+            'body' => $names !== ''
+                ? "Technical Support finished provisioning {$orderNo} ({$names})."
+                : "Technical Support finished provisioning {$orderNo}.",
+            'type' => 'provisioning',
+            'action_url' => '/public/dashboard?tab=orders',
+        ]);
+
+        $serviceIds = CustomerService::query()
+            ->where('sales_transaction_id', $transaction->id)
+            ->pluck('id');
+        if ($serviceIds->isEmpty()) {
+            return;
+        }
+
+        CustomerNotification::query()
+            ->where('customer_id', $transaction->customer_id)
+            ->whereIn(
+                'reference_key',
+                $serviceIds->map(fn ($id) => 'provisioning:service:' . $id)->all()
+            )
+            ->delete();
+    }
+
     public function notifyServiceActivated(CustomerService $service): void
     {
         CustomerNotification::query()
@@ -178,6 +220,29 @@ class CustomerPortalNotificationSync
             'type' => 'general',
             'action_url' => '/public/dashboard?tab=overview',
         ]);
+    }
+
+    private function technicalProvisioningFinished(CustomerService $service): bool
+    {
+        $transaction = $service->salesTransaction;
+        if (! $transaction) {
+            return false;
+        }
+
+        $transaction->loadMissing('provisioningRun.actions');
+        $run = $transaction->provisioningRun;
+        if (! $run) {
+            return false;
+        }
+
+        if ($run->status === 'completed') {
+            return true;
+        }
+
+        $actions = $run->actions;
+
+        return $actions->isNotEmpty()
+            && $actions->every(fn ($action) => in_array($action->status, ['completed', 'active'], true));
     }
 
     private function unpaidTransactions(Collection $transactions): Collection

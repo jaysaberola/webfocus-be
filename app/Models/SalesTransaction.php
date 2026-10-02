@@ -101,4 +101,9 @@ class SalesTransaction extends Model implements AuditableContract
     {
         return $this->hasMany(CustomerPaymentProof::class);
     }
+
+    public function provisioningRun()
+    {
+        return $this->hasOne(ProvisioningRun::class);
+    }
 }

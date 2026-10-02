@@ -33,6 +33,7 @@ use App\Http\Controllers\Api\PublicFreshchatController;
 use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\CommerceAdminController;
+use App\Http\Controllers\Api\ProvisioningController;
 use App\Http\Controllers\Api\DomainLookupController;
 use App\Http\Controllers\Api\PaynamicsPaymentController;
 use App\Http\Controllers\Api\AccountController;
@@ -90,6 +91,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/notifications/{notification}', [CommerceAdminController::class, 'deleteNotification']);
         Route::post('/notifications/broadcast', [CommerceAdminController::class, 'broadcastNotification']);
         Route::get('/assignable-users', [CommerceAdminController::class, 'assignableUsers']);
+        Route::get('/sales-transactions/{salesTransaction}/provisioning', [ProvisioningController::class, 'show']);
+        Route::post('/sales-transactions/{salesTransaction}/provisioning/actions', [ProvisioningController::class, 'storeAction']);
+        Route::patch('/provisioning-actions/{provisioningAction}/done', [ProvisioningController::class, 'markDone']);
+        Route::post('/sales-transactions/{salesTransaction}/provisioning/webdev-countdown', [ProvisioningController::class, 'startWebDev']);
         Route::patch('/sales-transactions/{salesTransaction}/assign', [CommerceAdminController::class, 'assignSalesTransaction']);
         Route::patch('/customers/{customer}/assign-owner', [CommerceAdminController::class, 'assignCustomerOwner']);
         Route::get('/customers/{customer}/next-rotating-owner', [CommerceAdminController::class, 'nextRotatingClientOwner']);
