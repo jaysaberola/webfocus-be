@@ -151,6 +151,46 @@ class ProvisioningWorkflow
         ];
     }
 
+    /**
+     * @return list<ProvisioningAction>
+     */
+    public function addActions(SalesTransaction $transaction, User $actor, array $input): array
+    {
+        $names = collect($input['service_names'] ?? [])
+            ->map(fn ($name) => trim((string) $name))
+            ->filter()
+            ->unique()
+            ->values();
+        if ($names->isEmpty()) {
+            $single = trim((string) ($input['service_name'] ?? ''));
+            if ($single !== '') {
+                $names = collect([$single]);
+            }
+        }
+        if ($names->isEmpty()) {
+            throw ValidationException::withMessages([
+                'service_names' => 'Choose at least one service on this order.',
+            ]);
+        }
+
+        $transaction->loadMissing('items');
+        $known = $transaction->items->pluck('name')->map(fn ($name) => trim((string) $name))->filter()->values();
+        if ($known->isNotEmpty() && $names->contains(fn ($name) => ! $known->contains($name))) {
+            throw ValidationException::withMessages([
+                'service_names' => 'Choose a service on this order.',
+            ]);
+        }
+
+        $actions = [];
+        foreach ($names as $name) {
+            $actions[] = $this->addAction($transaction, $actor, array_merge($input, [
+                'service_name' => $name,
+            ]));
+        }
+
+        return $actions;
+    }
+
     public function addAction(SalesTransaction $transaction, User $actor, array $input): ProvisioningAction
     {
         $this->assertCanManageActions($actor);

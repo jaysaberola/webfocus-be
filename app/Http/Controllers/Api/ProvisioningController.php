@@ -28,18 +28,22 @@ class ProvisioningController extends Controller
     {
         $staff = $this->resolveStaff($request);
         $payload = $request->validate([
-            'service_name' => ['required', 'string', 'max:255'],
+            'service_name' => ['required_without:service_names', 'string', 'max:255'],
+            'service_names' => ['required_without:service_name', 'array', 'min:1'],
+            'service_names.*' => ['string', 'max:255'],
             'description' => ['required', 'string', 'max:500'],
             'assigned_to' => ['nullable', 'integer'],
             'checkpoint_hours' => ['nullable', 'integer', 'in:12,24'],
         ]);
 
-        $action = $this->workflow->addAction($salesTransaction, $staff, $payload);
+        $actions = $this->workflow->addActions($salesTransaction, $staff, $payload);
 
         return response()->json([
-            'message' => 'Provisioning action added.',
+            'message' => count($actions) === 1
+                ? 'Provisioning action added.'
+                : 'Provisioning actions added.',
             'data' => $this->workflow->show($salesTransaction, $staff),
-            'actionId' => $action->id,
+            'actionId' => $actions[0]->id ?? null,
         ]);
     }
 
