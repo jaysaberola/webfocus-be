@@ -15,6 +15,7 @@ class CustomerPortalProvisioner
     public const STATUS_PROVISIONING = 'Provisioning';
     public const STATUS_AWAITING_APPROVAL = 'Awaiting Approval';
     public const STATUS_PENDING = 'Pending Request';
+    public const STATUS_PENDING_PAYMENT = 'Pending Payment';
     public const STATUS_EXPIRED = 'Expired';
     public const STATUS_CANCELLED = 'Cancelled';
 
@@ -154,8 +155,12 @@ class CustomerPortalProvisioner
             return self::STATUS_AWAITING_APPROVAL;
         }
 
-        if ($paid) {
+        if ($paid && self::hasVerifiedPaymentProof($transaction)) {
             return self::STATUS_PROVISIONING;
+        }
+
+        if ($paid) {
+            return self::STATUS_PENDING_PAYMENT;
         }
 
         if (self::isPaymentSubmitted($transaction)) {
@@ -193,6 +198,17 @@ class CustomerPortalProvisioner
                     ->orWhere('invoice_id', 'INV-' . $transaction->transaction_no);
             })
             ->where('status', 'Pending Review')
+            ->exists();
+    }
+
+    public static function hasVerifiedPaymentProof(SalesTransaction $transaction): bool
+    {
+        return CustomerPaymentProof::query()
+            ->where(function ($query) use ($transaction) {
+                $query->where('sales_transaction_id', $transaction->id)
+                    ->orWhere('invoice_id', 'INV-' . $transaction->transaction_no);
+            })
+            ->where('status', 'Verified & Credited')
             ->exists();
     }
 
@@ -264,6 +280,7 @@ class CustomerPortalProvisioner
     {
         return match ($status) {
             self::STATUS_AWAITING_APPROVAL => 'Payment proof is pending admin approval. Provisioning begins after payment is complete.',
+            self::STATUS_PENDING_PAYMENT => 'Upload your payment receipt so billing can confirm it. Provisioning starts after the receipt is approved.',
             self::STATUS_PROVISIONING => 'Payment is confirmed and your services are being provisioned.',
             self::STATUS_ACTIVE => 'Your services are now active.',
             default => 'Provisioning begins after payment is confirmed.',
