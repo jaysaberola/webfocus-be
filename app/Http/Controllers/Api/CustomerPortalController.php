@@ -15,6 +15,7 @@ use App\Models\SalesTransactionProposal;
 use App\Models\Service;
 use App\Models\User;
 use App\Support\DealMeta;
+use App\Support\ProvisioningRules;
 use App\Support\PendingCheckoutGuard;
 use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
@@ -653,7 +654,7 @@ class CustomerPortalController extends Controller
             $key = (string) $row->reference_key;
             if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
                 $serviceIds[] = (int) $match[1];
-            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|webdesign-quotation(?:-priced|-reply)?:|webdesign-proposal:)(\d+)$/', $key, $match)) {
+            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|order-provisioned:|webdesign-quotation(?:-priced|-reply)?:|webdesign-proposal:)(\d+)$/', $key, $match)) {
                 $transactionIds[] = (int) $match[1];
             }
             if (preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)) {
@@ -671,14 +672,14 @@ class CustomerPortalController extends Controller
         $transactions = $transactionIds === []
             ? collect()
             : SalesTransaction::query()
-                ->with(['items', 'proposals'])
+                ->with(['items', 'proposals', 'provisioningRun.actions'])
                 ->where('customer_id', $customer->id)
                 ->whereIn('id', $transactionIds)
                 ->get()
                 ->keyBy('id');
         if ($transactionNos !== []) {
             $byNo = SalesTransaction::query()
-                ->with(['items', 'proposals'])
+                ->with(['items', 'proposals', 'provisioningRun.actions'])
                 ->where('customer_id', $customer->id)
                 ->whereIn('transaction_no', array_values(array_unique($transactionNos)))
                 ->get()
@@ -1495,6 +1496,37 @@ class CustomerPortalController extends Controller
                         'Proof Status' => $proof->status,
                     ]));
                 }
+            }
+        } elseif (preg_match('/^order-provisioned:(\d+)$/', $key, $match)) {
+            $transaction = $transactions->get((int) $match[1]);
+            if ($transaction instanceof SalesTransaction) {
+                $transaction->loadMissing('items', 'provisioningRun.actions');
+                $itemNames = $transaction->items
+                    ? $transaction->items->pluck('name')->filter()->take(4)->implode(', ')
+                    : '';
+                $hours = collect($transaction->provisioningRun?->actions ?? [])
+                    ->pluck('checkpoint_hours')
+                    ->map(fn ($hour) => (int) $hour)
+                    ->filter(fn ($hour) => in_array($hour, [ProvisioningRules::CHECKPOINT_STANDARD, ProvisioningRules::CHECKPOINT_WEBDEV], true))
+                    ->unique()
+                    ->sort()
+                    ->values();
+                if ($hours->isEmpty()) {
+                    $hours = collect([ProvisioningRules::checkpointFor(
+                        (string) ($transaction->provisioningRun?->timeline ?: 'standard')
+                    )]);
+                }
+                $checkpointLabel = $hours->count() === 1
+                    ? $hours->first().' hours'
+                    : $hours->implode(' or ').' hours';
+                $details = $this->portalInboxDetails([
+                    'Order No' => $transaction->transaction_no,
+                    'Services' => $itemNames,
+                    'Status' => 'Completed',
+                    'Checkpoint' => $checkpointLabel,
+                    'Next status' => 'Active',
+                    'Received' => optional($row->created_at)->format('M j, Y g:i A'),
+                ]);
             }
         }
 

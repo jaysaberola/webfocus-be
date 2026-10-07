@@ -6,6 +6,7 @@ use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
 use App\Models\SalesTransaction;
+use App\Support\ProvisioningRules;
 use Illuminate\Support\Collection;
 
 class CustomerPortalNotificationSync
@@ -179,14 +180,16 @@ class CustomerPortalNotificationSync
             return;
         }
 
-        $transaction->loadMissing('items');
+        $transaction->loadMissing('items', 'provisioningRun.actions');
         $names = $transaction->items->pluck('name')->filter()->take(4)->implode(', ');
         $orderNo = $transaction->transaction_no ?: ('Order ' . $transaction->id);
+        $checkpoint = $this->checkpointPhrase($transaction);
+        $finished = $names !== ''
+            ? "Technical Support finished provisioning {$orderNo} ({$names})."
+            : "Technical Support finished provisioning {$orderNo}.";
         $this->upsert((int) $transaction->customer_id, 'order-provisioned:' . $transaction->id, [
             'title' => 'Technical provisioning completed',
-            'body' => $names !== ''
-                ? "Technical Support finished provisioning {$orderNo} ({$names})."
-                : "Technical Support finished provisioning {$orderNo}.",
+            'body' => "{$finished} The status becomes Active after the {$checkpoint} checkpoint.",
             'type' => 'provisioning',
             'action_url' => '/public/dashboard?tab=orders',
         ]);
@@ -220,6 +223,29 @@ class CustomerPortalNotificationSync
             'type' => 'general',
             'action_url' => '/public/dashboard?tab=overview',
         ]);
+    }
+
+    private function checkpointPhrase(SalesTransaction $transaction): string
+    {
+        $transaction->loadMissing('provisioningRun.actions');
+        $hours = collect($transaction->provisioningRun?->actions ?? [])
+            ->pluck('checkpoint_hours')
+            ->map(fn ($hour) => (int) $hour)
+            ->filter(fn ($hour) => in_array($hour, [ProvisioningRules::CHECKPOINT_STANDARD, ProvisioningRules::CHECKPOINT_WEBDEV], true))
+            ->unique()
+            ->sort()
+            ->values();
+
+        if ($hours->isEmpty()) {
+            $timeline = (string) ($transaction->provisioningRun?->timeline ?: 'standard');
+            $hours = collect([ProvisioningRules::checkpointFor($timeline)]);
+        }
+
+        if ($hours->count() === 1) {
+            return $hours->first().'-hour';
+        }
+
+        return $hours->map(fn ($hour) => $hour.'-hour')->implode(' or ');
     }
 
     private function technicalProvisioningFinished(CustomerService $service): bool
