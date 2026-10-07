@@ -1519,12 +1519,14 @@ class CustomerPortalController extends Controller
                 $checkpointLabel = $hours->count() === 1
                     ? $hours->first().' hours'
                     : $hours->implode(' or ').' hours';
+                $activeAt = ProvisioningRules::latestCheckpointEnd($transaction->provisioningRun?->actions ?? []);
                 $details = $this->portalInboxDetails([
                     'Order No' => $transaction->transaction_no,
                     'Services' => $itemNames,
-                    'Status' => 'Completed',
+                    'Status' => $activeAt ? 'Completed' : 'Active',
                     'Checkpoint' => $checkpointLabel,
                     'Next status' => 'Active',
+                    'Checkpoint ends' => $activeAt?->toIso8601String(),
                     'Received' => optional($row->created_at)->format('M j, Y g:i A'),
                 ]);
             }

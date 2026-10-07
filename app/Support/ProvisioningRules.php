@@ -79,6 +79,37 @@ class ProvisioningRules
     }
 
     /**
+     * Latest moment a completed action on this order becomes Active.
+     */
+    public static function latestCheckpointEnd(iterable $actions): ?Carbon
+    {
+        $latest = null;
+        foreach ($actions as $action) {
+            $status = strtolower(trim((string) ($action->status ?? '')));
+            if ($status !== 'completed') {
+                continue;
+            }
+
+            $completedAt = $action->completed_at ?? $action->done_at ?? null;
+            if ($completedAt === null) {
+                continue;
+            }
+
+            $hours = (int) ($action->checkpoint_hours ?? self::CHECKPOINT_STANDARD);
+            if (! in_array($hours, [self::CHECKPOINT_STANDARD, self::CHECKPOINT_WEBDEV], true)) {
+                $hours = self::CHECKPOINT_STANDARD;
+            }
+
+            $end = Carbon::parse($completedAt)->copy()->addHours($hours);
+            if ($latest === null || $end->greaterThan($latest)) {
+                $latest = $end;
+            }
+        }
+
+        return $latest;
+    }
+
+    /**
      * Promote an action without touching the order's provisioning status.
      *
      * Completed requires Done recorded inside the assigned countdown.
