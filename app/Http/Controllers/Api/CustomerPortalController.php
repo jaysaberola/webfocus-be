@@ -1634,7 +1634,6 @@ class CustomerPortalController extends Controller
         if ($details === []) {
             $details = $this->portalInboxDetails([
                 'Category' => $type,
-                'Status' => $row->read_at ? 'Read' : 'Unread',
                 'Received' => optional($row->created_at)->format('M j, Y g:i A'),
                 'Details' => $row->body,
             ]);
