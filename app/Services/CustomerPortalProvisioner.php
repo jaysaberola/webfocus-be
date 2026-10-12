@@ -5,9 +5,12 @@ namespace App\Services;
 use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
+use App\Models\ProvisioningRun;
 use App\Models\SalesTransaction;
+use App\Support\ProvisioningRules;
 use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 class CustomerPortalProvisioner
 {
@@ -147,7 +150,7 @@ class CustomerPortalProvisioner
             return self::STATUS_EXPIRED;
         }
 
-        if ($paid && $live) {
+        if ($paid && ($live || self::isProvisioningFinished($transaction))) {
             return self::STATUS_ACTIVE;
         }
 
@@ -188,6 +191,100 @@ class CustomerPortalProvisioner
     public static function isActiveStatus(?string $status): bool
     {
         return in_array($status, ['Active', self::STATUS_ACTIVE], true);
+    }
+
+    public function activateReadyForCustomer(int $customerId): void
+    {
+        $transactions = SalesTransaction::query()
+            ->where('customer_id', $customerId)
+            ->with(['items', 'provisioningRun', 'paymentProofs'])
+            ->get();
+
+        foreach ($transactions as $transaction) {
+            $this->activateIfReady($transaction);
+        }
+    }
+
+    public function activateIfReady(SalesTransaction $transaction): void
+    {
+        if (self::resolveServiceStatus($transaction) !== self::STATUS_ACTIVE) {
+            return;
+        }
+
+        $current = strtolower((string) $transaction->order_status);
+        if (in_array($current, ['active', 'completed', 'delivered', 'live', 'cancelled', 'canceled'], true)) {
+            return;
+        }
+
+        $transaction->order_status = 'active';
+        $transaction->save();
+        $this->refreshServicesFromTransaction($transaction->fresh('items'));
+    }
+
+    public static function isProvisioningFinished(SalesTransaction $transaction): bool
+    {
+        $run = self::provisioningRunFor($transaction);
+        if ($run) {
+            if ($run->status === 'completed') {
+                return true;
+            }
+            if ($run->status === 'cancelled') {
+                return false;
+            }
+
+            $run->loadMissing('actions');
+            if ($run->actions->isNotEmpty()
+                && $run->actions->contains(fn ($action) => ! ProvisioningRules::isSettledStatus($action->status))) {
+                return false;
+            }
+
+            return self::runWindowElapsed($run);
+        }
+
+        $approvedAt = self::approvedAt($transaction);
+        if ($approvedAt === null) {
+            return false;
+        }
+
+        $transaction->loadMissing('items');
+        if (WebDesignQuotation::isWebDesign($transaction)) {
+            return false;
+        }
+
+        $plan = ProvisioningRules::timelineFor($transaction->items, false);
+        $hours = (int) ($plan['durationHours'] ?: ProvisioningRules::STANDARD_HOURS);
+
+        return now()->greaterThanOrEqualTo(Carbon::parse($approvedAt)->addHours($hours));
+    }
+
+    private static function provisioningRunFor(SalesTransaction $transaction): ?ProvisioningRun
+    {
+        if ($transaction->relationLoaded('provisioningRun')) {
+            return $transaction->provisioningRun;
+        }
+
+        if (! Schema::hasTable('provisioning_runs')) {
+            return null;
+        }
+
+        return $transaction->provisioningRun()->first();
+    }
+
+    private static function runWindowElapsed(ProvisioningRun $run): bool
+    {
+        if ($run->timeline === 'webdev') {
+            if (! $run->webdev_started_at || ! $run->webdev_days) {
+                return false;
+            }
+
+            return now()->greaterThanOrEqualTo($run->webdev_started_at->copy()->addDays((int) $run->webdev_days));
+        }
+
+        if (! $run->countdown_started_at || ! $run->duration_hours) {
+            return false;
+        }
+
+        return now()->greaterThanOrEqualTo($run->countdown_started_at->copy()->addHours((int) $run->duration_hours));
     }
 
     public static function hasUnverifiedPaymentProof(SalesTransaction $transaction): bool

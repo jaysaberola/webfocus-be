@@ -353,7 +353,7 @@ class CommerceAdminController extends Controller
                     $run->loadCount([
                         'actions',
                         'actions as settled_actions_count' => function ($actions) {
-                            $actions->whereIn('status', ['completed', 'active']);
+                            $actions->whereIn('status', ['done', 'completed', 'active']);
                         },
                     ]);
                 }
@@ -734,7 +734,7 @@ class CommerceAdminController extends Controller
                 $orderIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed|priced):(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
-            } elseif (preg_match('/^admin:provisioning-action:(\d+)$/', $key, $m)) {
+            } elseif (preg_match('/^admin:provisioning-(?:action|countdown):(\d+)$/', $key, $m)) {
                 $actionIds[] = (int) $m[1];
             }
         }
@@ -1037,9 +1037,21 @@ class CommerceAdminController extends Controller
         $items = $transaction?->items;
         $firstItem = $items?->first();
         $transactedAt = $transaction?->transacted_at;
+        if ($transaction) {
+            app(CustomerPortalProvisioner::class)->activateIfReady($transaction);
+            $transaction->refresh();
+            $transaction->loadMissing(['provisioningRun', 'items', 'paymentProofs']);
+        }
         $provisioning = $transaction?->provisioningRun
             ? app(ProvisioningWorkflow::class)->listSummary($transaction->provisioningRun)
             : null;
+        $orderStatus = $transaction
+            ? CustomerPortalProvisioner::resolveServiceStatus($transaction)
+            : null;
+        $status = $provisioning['status'] ?? $proof->status;
+        if ($orderStatus === CustomerPortalProvisioner::STATUS_ACTIVE) {
+            $status = 'Active';
+        }
 
         return [
             'id' => $proof->id,
@@ -1050,7 +1062,7 @@ class CommerceAdminController extends Controller
             'email' => $customer?->email,
             'fileName' => $proof->file_name,
             'fileUrl' => StorageUrl::publicAsset($proof->file_path),
-            'status' => $provisioning ? 'Provisioning' : $proof->status,
+            'status' => $status,
             'proofStatus' => $proof->status,
             'provisioning' => $provisioning,
             'notes' => $proof->notes,
@@ -1351,7 +1363,8 @@ class CommerceAdminController extends Controller
             str_starts_with($referenceKey, 'admin:webdesign-signed:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-assigned:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-priced:') => 'web_design_quotation',
-            str_starts_with($referenceKey, 'admin:provisioning-action:') => 'provisioning_action',
+            str_starts_with($referenceKey, 'admin:provisioning-action:')
+                || str_starts_with($referenceKey, 'admin:provisioning-countdown:') => 'provisioning_action',
             default => (string) ($row->type ?: 'general'),
         };
 
@@ -1508,9 +1521,10 @@ class CommerceAdminController extends Controller
                     $row->created_at,
                 );
             }
-        } elseif (preg_match('/^admin:provisioning-action:(\d+)$/', $referenceKey, $match)) {
+        } elseif (preg_match('/^admin:provisioning-(?:action|countdown):(\d+)$/', $referenceKey, $match)) {
             $action = $provisioningActions?->get((int) $match[1]);
-            $status = 'Assigned';
+            $isReminder = str_starts_with($referenceKey, 'admin:provisioning-countdown:');
+            $status = $isReminder ? 'Mark done' : 'Assigned';
             if ($action) {
                 $order = $action->salesTransaction;
                 $customer = $order?->customer;
@@ -1521,6 +1535,13 @@ class CommerceAdminController extends Controller
                 $assigneeName = trim(($action->assignee?->fname ?? '') . ' ' . ($action->assignee?->lname ?? '')) ?: 'Unassigned';
                 $authorName = trim(($action->author?->fname ?? '') . ' ' . ($action->author?->lname ?? ''));
                 $intro = (string) $row->body;
+                $dueAt = $action->due_at;
+                $countdownLabel = null;
+                if ($dueAt) {
+                    $countdownLabel = now()->greaterThanOrEqualTo($dueAt)
+                        ? 'Countdown finished'
+                        : $dueAt->diffForHumans(now(), true) . ' left';
+                }
                 $details = $this->inboxDetails([
                     'Client' => $fromName,
                     'Email' => $fromEmail,
@@ -1529,7 +1550,9 @@ class CommerceAdminController extends Controller
                     'Action' => $action->description,
                     'Assigned to' => $assigneeName,
                     'Assigned by' => $authorName,
-                    'Checkpoint' => $action->checkpoint_hours ? $action->checkpoint_hours . ' hours' : null,
+                    'Countdown' => $countdownLabel,
+                    'Due' => $this->formatAppDateTime($dueAt, 'M j, Y g:i A'),
+                    'Next step' => $action->status === 'pending' ? 'Mark this action done' : ucfirst((string) $action->status),
                     'Status' => ucfirst((string) $action->status),
                 ]);
             }

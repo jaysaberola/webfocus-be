@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\CustomerPaymentProof;
+use App\Models\ProvisioningRun;
 use App\Models\SalesTransaction;
 use App\Services\CustomerPortalProvisioner;
 use Carbon\Carbon;
@@ -61,5 +62,43 @@ class CustomerPortalProvisionerApprovedAtTest extends TestCase
 
         $this->assertSame(1, preg_match_all('/\[APPROVED_AT:[^\]]+\]/', $second));
         $this->assertStringContainsString('[APPROVED_AT:2026-09-23T03:11:00+00:00]', $second);
+    }
+
+    public function test_completed_provisioning_run_is_active_live(): void
+    {
+        $run = new ProvisioningRun();
+        $run->status = 'completed';
+
+        $transaction = new SalesTransaction();
+        $transaction->payment_status = 'paid';
+        $transaction->order_status = 'processing';
+        $transaction->setRelation('provisioningRun', $run);
+        $transaction->setRelation('paymentProofs', collect());
+
+        $this->assertSame(
+            CustomerPortalProvisioner::STATUS_ACTIVE,
+            CustomerPortalProvisioner::resolveServiceStatus($transaction)
+        );
+    }
+
+    public function test_finished_countdown_without_a_run_is_active_live(): void
+    {
+        $item = new \App\Models\SalesTransactionItem();
+        $item->name = 'Business Hosting';
+        $item->item_type = 'service';
+
+        $transaction = new SalesTransaction();
+        $transaction->payment_status = 'paid';
+        $transaction->order_status = 'processing';
+        $transaction->notes = '[APPROVED_AT:2026-10-01T08:00:00+00:00]';
+        $transaction->setRelation('provisioningRun', null);
+        $transaction->setRelation('paymentProofs', collect());
+        $transaction->setRelation('items', collect([$item]));
+
+        $this->assertTrue(CustomerPortalProvisioner::isProvisioningFinished($transaction));
+        $this->assertSame(
+            CustomerPortalProvisioner::STATUS_ACTIVE,
+            CustomerPortalProvisioner::resolveServiceStatus($transaction)
+        );
     }
 }

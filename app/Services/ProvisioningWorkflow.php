@@ -14,6 +14,7 @@ use App\Support\TransactionLabelResolver;
 use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 class ProvisioningWorkflow
@@ -100,6 +101,10 @@ class ProvisioningWorkflow
 
     public function customerView(SalesTransaction $transaction): ?array
     {
+        if (! Schema::hasTable('provisioning_runs')) {
+            return null;
+        }
+
         $run = $transaction->relationLoaded('provisioningRun')
             ? $transaction->provisioningRun
             : $this->runFor($transaction);
@@ -109,6 +114,12 @@ class ProvisioningWorkflow
         }
 
         $this->sync($run);
+        $transaction->unsetRelation('provisioningRun');
+        $transaction->setRelation('provisioningRun', $run->fresh([
+            'actions.assignee:id,fname,lname,email',
+            'webdevStarter:id,fname,lname,email',
+        ]) ?? $run);
+        $run = $transaction->provisioningRun;
         $run->loadMissing(['actions.assignee:id,fname,lname,email', 'webdevStarter:id,fname,lname,email']);
         $this->notifyIfTechnicalWorkFinished($run);
 
@@ -131,7 +142,7 @@ class ProvisioningWorkflow
 
     public function listSummary(?ProvisioningRun $run): ?array
     {
-        if (! $run || $run->status !== 'provisioning') {
+        if (! $run || $run->status === 'cancelled') {
             return null;
         }
 
@@ -140,7 +151,7 @@ class ProvisioningWorkflow
             : $this->countdownPayload($run, false);
 
         return [
-            'status' => 'Provisioning',
+            'status' => $this->orderStatusLabel($run),
             'timeline' => $run->timeline,
             'countdown' => $primary,
             'webdevCountdown' => $run->timeline === 'webdev' ? $primary : null,
@@ -252,7 +263,7 @@ class ProvisioningWorkflow
             return $action;
         });
 
-        $action = $action->fresh(['assignee:id,fname,lname,email', 'author:id,fname,lname,email']);
+        $action = $action->fresh(['assignee:id,fname,lname,email', 'author:id,fname,lname,email', 'run']);
         $this->notifyActionAssigned($transaction, $action, $actor, $assignee);
 
         return $action;
@@ -279,6 +290,7 @@ class ProvisioningWorkflow
 
             $this->applySync($run, $action->fresh(), $actor);
             $this->maybeCompleteRun($run->fresh('actions'), $actor);
+            $this->clearMarkDoneReminder($action);
         });
 
         return $action->fresh(['assignee:id,fname,lname,email', 'author:id,fname,lname,email']);
@@ -318,7 +330,12 @@ class ProvisioningWorkflow
             $this->sync($run->fresh(['actions']));
         });
 
-        return $run->fresh();
+        $fresh = $run->fresh(['actions.assignee', 'salesTransaction.customer']);
+        if ($fresh) {
+            $this->notifyPendingAssigneesOfCountdown($fresh, true);
+        }
+
+        return $fresh ?? $run->fresh();
     }
 
     public function sync(ProvisioningRun $run, ?User $actor = null): void
@@ -327,8 +344,23 @@ class ProvisioningWorkflow
         foreach ($run->actions as $action) {
             $this->applySync($run, $action, $actor);
         }
-        $this->maybeCompleteRun($run->fresh('actions'), $actor);
-        $this->notifyIfTechnicalWorkFinished($run->fresh('actions'));
+        $run->load('actions');
+        $this->maybeCompleteRun($run, $actor);
+        $this->notifyIfTechnicalWorkFinished($run);
+        $this->notifyPendingAssigneesOfCountdown($run, false);
+    }
+
+    public function syncOpenForCustomer(int $customerId): void
+    {
+        $runs = ProvisioningRun::query()
+            ->where('status', 'provisioning')
+            ->whereHas('salesTransaction', fn ($query) => $query->where('customer_id', $customerId))
+            ->with('actions')
+            ->get();
+
+        foreach ($runs as $run) {
+            $this->sync($run);
+        }
     }
 
     private function applySync(ProvisioningRun $run, ProvisioningAction $action, ?User $actor): void
@@ -384,7 +416,9 @@ class ProvisioningWorkflow
         }
 
         $actions = $run->relationLoaded('actions') ? $run->actions : $run->actions()->get();
-        if ($actions->isEmpty() || $actions->contains(fn (ProvisioningAction $action) => $action->status !== 'active')) {
+        if ($actions->isEmpty() || $actions->contains(
+            fn (ProvisioningAction $action) => ! ProvisioningRules::isSettledStatus($action->status)
+        )) {
             return;
         }
 
@@ -394,23 +428,33 @@ class ProvisioningWorkflow
 
         $run->status = 'completed';
         $run->save();
-        $this->record($run, $actor, 'provisioning_status_changed', 'Order provisioning finished after the countdown and every action became Active.', [
-            ['label' => 'Provisioning status', 'from' => 'Provisioning', 'to' => 'Completed'],
+        $this->record($run, $actor, 'provisioning_status_changed', 'Order provisioning finished after the countdown and every action was marked done.', [
+            ['label' => 'Provisioning status', 'from' => 'Provisioning', 'to' => 'Active'],
+            ['label' => 'Order status', 'from' => 'Provisioning', 'to' => 'Active'],
         ]);
 
         $transaction = $run->relationLoaded('salesTransaction')
             ? $run->salesTransaction
             : $run->salesTransaction()->first();
-        if ($transaction) {
-            app(CustomerPortalNotificationSync::class)->notifyTechnicalProvisioningCompleted($transaction);
+        if (! $transaction) {
+            return;
         }
+
+        $current = strtolower((string) $transaction->order_status);
+        if (! in_array($current, ['cancelled', 'canceled'], true)) {
+            $transaction->order_status = 'active';
+            $transaction->save();
+        }
+
+        app(CustomerPortalProvisioner::class)->refreshServicesFromTransaction($transaction->fresh('items'));
+        app(CustomerPortalNotificationSync::class)->notifyTechnicalProvisioningCompleted($transaction->fresh(['items', 'provisioningRun.actions']));
     }
 
     private function notifyIfTechnicalWorkFinished(ProvisioningRun $run): void
     {
         $actions = $run->relationLoaded('actions') ? $run->actions : $run->actions()->get();
         if ($actions->isEmpty() || $actions->contains(
-            fn (ProvisioningAction $action) => ! in_array($action->status, ['completed', 'active'], true)
+            fn (ProvisioningAction $action) => ! ProvisioningRules::isSettledStatus($action->status)
         )) {
             return;
         }
@@ -631,17 +675,12 @@ class ProvisioningWorkflow
     private function notifyActionAssigned(SalesTransaction $transaction, ProvisioningAction $action, User $actor, ?User $assignee): void
     {
         $transaction->loadMissing('customer:id,fname,lname,mname,email');
-        $client = trim((string) ($transaction->customer_name ?: ''));
-        if ($client === '' && $transaction->customer) {
-            $client = trim(($transaction->customer->fname ?? '') . ' ' . ($transaction->customer->lname ?? ''));
-        }
-        if ($client === '') {
-            $client = (string) ($transaction->customer_email ?: $transaction->customer?->email ?: 'Client');
-        }
-
+        $run = $action->relationLoaded('run') ? $action->run : $action->run()->first();
+        $client = $this->clientLabel($transaction);
         $orderNo = (string) ($transaction->transaction_no ?: ('Order ' . $transaction->id));
         $actorName = $this->userName($actor) ?: 'Staff';
         $assigneeName = $assignee ? ($this->userName($assignee) ?: 'Technical Support') : null;
+        $countdown = $run ? $this->countdownMarkDoneNotice($run, $action) : 'Mark this done before the provisioning countdown ends.';
         $referenceKey = 'admin:provisioning-action:' . $action->id;
         $actionUrl = '/public/commerce-admin?tab=approvals';
 
@@ -654,20 +693,20 @@ class ProvisioningWorkflow
 
         $recipientIds
             ->map(fn ($id) => (int) $id)
-            ->filter(fn ($id) => $id > 0 && $id !== (int) $actor->id)
+            ->filter(fn ($id) => $id > 0)
             ->unique()
-            ->each(function (int $staffId) use ($action, $assignee, $assigneeName, $actorName, $client, $orderNo, $referenceKey, $actionUrl) {
+            ->each(function (int $staffId) use ($action, $assignee, $assigneeName, $actorName, $client, $orderNo, $countdown, $referenceKey, $actionUrl) {
                 $forAssignee = $assignee && $staffId === (int) $assignee->id;
                 $title = $forAssignee
-                    ? 'Provisioning action assigned to you'
+                    ? 'Mark provisioning done before the countdown ends'
                     : ($assigneeName
                         ? 'Provisioning action assigned'
                         : 'Provisioning action needs Technical Support');
                 $body = $forAssignee
-                    ? "{$actorName} assigned you \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client})."
+                    ? "{$actorName} assigned you \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client}). {$countdown}"
                     : ($assigneeName
-                        ? "{$actorName} assigned {$assigneeName} to \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client})."
-                        : "{$actorName} added \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client}). It still needs a Technical Support assignee.");
+                        ? "{$actorName} assigned {$assigneeName} to \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client}). {$countdown}"
+                        : "{$actorName} added \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client}). Assign Technical Support and mark it done. {$countdown}");
 
                 CustomerNotification::query()->updateOrCreate(
                     [
@@ -683,6 +722,141 @@ class ProvisioningWorkflow
                     ]
                 );
             });
+
+        if ($assignee && $run) {
+            $this->notifyMarkDoneReminder($transaction, $action, $run, true);
+        }
+    }
+
+    private function notifyPendingAssigneesOfCountdown(ProvisioningRun $run, bool $forceUnread): void
+    {
+        if ($run->status !== 'provisioning') {
+            return;
+        }
+
+        $run->loadMissing(['actions.assignee', 'salesTransaction.customer']);
+        $transaction = $run->relationLoaded('salesTransaction')
+            ? $run->salesTransaction
+            : $run->salesTransaction()->first();
+        if (! $transaction) {
+            return;
+        }
+
+        foreach ($run->actions as $action) {
+            if ($action->status !== 'pending' || ! $action->assigned_to) {
+                continue;
+            }
+
+            $this->notifyMarkDoneReminder($transaction, $action, $run, $forceUnread);
+        }
+    }
+
+    private function notifyMarkDoneReminder(
+        SalesTransaction $transaction,
+        ProvisioningAction $action,
+        ProvisioningRun $run,
+        bool $forceUnread,
+    ): void {
+        $assigneeId = (int) $action->assigned_to;
+        if ($assigneeId < 1) {
+            return;
+        }
+
+        $dueAt = $action->due_at ?? $this->actionDueAt($run);
+        $countdown = $this->countdownMarkDoneNotice($run, $action);
+        $remainingHours = $dueAt ? now()->diffInHours($dueAt, false) : null;
+        $urgentWindow = $run->timeline === 'webdev' ? 24 : 6;
+        $urgent = $remainingHours !== null && $remainingHours >= 0 && $remainingHours <= $urgentWindow;
+        $ended = $dueAt !== null && now()->greaterThanOrEqualTo($dueAt);
+        $referenceKey = 'admin:provisioning-countdown:' . $action->id;
+        $existing = CustomerNotification::query()
+            ->where('customer_id', $assigneeId)
+            ->where('reference_key', $referenceKey)
+            ->first();
+
+        $shouldUnread = $forceUnread
+            || ! $existing
+            || (($ended || $urgent) && ($existing->updated_at === null || $existing->updated_at->lt(now()->subHours(3))));
+
+        $client = $this->clientLabel($transaction);
+        $orderNo = (string) ($transaction->transaction_no ?: ('Order ' . $transaction->id));
+        $title = $ended
+            ? 'Countdown ended — mark provisioning done'
+            : ($urgent
+                ? 'Countdown ending — mark provisioning done'
+                : 'Mark provisioning done before the countdown ends');
+
+        CustomerNotification::query()->updateOrCreate(
+            [
+                'customer_id' => $assigneeId,
+                'reference_key' => $referenceKey,
+            ],
+            [
+                'title' => $title,
+                'body' => "Finish \"{$action->description}\" for {$action->service_name} on {$orderNo} ({$client}). {$countdown}",
+                'type' => 'provisioning_action',
+                'action_url' => '/public/commerce-admin?tab=approvals',
+                'read_at' => $shouldUnread ? null : $existing?->read_at,
+            ]
+        );
+    }
+
+    private function clearMarkDoneReminder(ProvisioningAction $action): void
+    {
+        CustomerNotification::query()
+            ->where('reference_key', 'admin:provisioning-countdown:' . $action->id)
+            ->delete();
+    }
+
+    private function countdownMarkDoneNotice(ProvisioningRun $run, ?ProvisioningAction $action = null): string
+    {
+        $dueAt = $action?->due_at ?? $this->actionDueAt($run);
+        if ($dueAt === null) {
+            return $run->timeline === 'webdev'
+                ? 'A WebDev countdown has not started yet. Mark this done after Sales/Production starts it.'
+                : 'Mark this done before the provisioning countdown ends.';
+        }
+
+        $dueLabel = $dueAt->timezone(config('app.timezone', 'Asia/Manila'))->format('M j, Y g:i A');
+        if (now()->greaterThanOrEqualTo($dueAt)) {
+            return "The countdown has ended (due {$dueLabel}). Mark this done now so the order can become Active.";
+        }
+
+        return "Mark this done before the countdown ends. {$this->remainingLabel($dueAt)} left (due {$dueLabel}).";
+    }
+
+    private function remainingLabel(Carbon $dueAt): string
+    {
+        $now = now();
+        $hours = (int) $now->diffInHours($dueAt, false);
+        if ($hours >= 48) {
+            $days = (int) floor($hours / 24);
+            $left = $hours % 24;
+
+            return $left > 0 ? "{$days} days {$left} hours" : "{$days} days";
+        }
+        if ($hours >= 1) {
+            $minutes = (int) $now->copy()->addHours($hours)->diffInMinutes($dueAt, false);
+
+            return $minutes > 0 ? "{$hours} hours {$minutes} minutes" : "{$hours} hours";
+        }
+
+        $minutes = max(1, (int) $now->diffInMinutes($dueAt, false));
+
+        return "{$minutes} minutes";
+    }
+
+    private function clientLabel(SalesTransaction $transaction): string
+    {
+        $client = trim((string) ($transaction->customer_name ?: ''));
+        if ($client === '' && $transaction->customer) {
+            $client = trim(($transaction->customer->fname ?? '') . ' ' . ($transaction->customer->lname ?? ''));
+        }
+        if ($client === '') {
+            $client = (string) ($transaction->customer_email ?: $transaction->customer?->email ?: 'Client');
+        }
+
+        return $client;
     }
 
     private function resolveAssignee(mixed $userId): ?User
@@ -723,7 +897,7 @@ class ProvisioningWorkflow
 
     private function orderStatusLabel(ProvisioningRun $run): string
     {
-        return $run->status === 'completed' ? 'Completed' : 'Provisioning';
+        return $run->status === 'completed' ? 'Active' : 'Provisioning';
     }
 
     private function actionStatusLabel(string $status): string

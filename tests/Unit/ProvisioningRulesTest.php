@@ -68,16 +68,34 @@ class ProvisioningRulesTest extends TestCase
         $this->assertSame(['active'], $active['events']);
     }
 
-    public function test_late_done_does_not_become_completed_or_active(): void
+    public function test_late_done_still_becomes_active_after_the_countdown(): void
     {
         $dueAt = Carbon::parse('2026-10-02 08:00:00');
         $doneAt = $dueAt->copy()->addHour();
 
         $late = ProvisioningRules::syncAction('done', $doneAt, null, $dueAt, 12, $doneAt->copy()->addHours(24));
 
-        $this->assertSame('done', $late['status']);
-        $this->assertSame([], $late['events']);
-        $this->assertNull($late['validatedAt']);
+        $this->assertSame('active', $late['status']);
+        $this->assertSame(['completed', 'active'], $late['events']);
+        $this->assertNotNull($late['validatedAt']);
+    }
+
+    public function test_done_becomes_active_when_the_countdown_has_finished(): void
+    {
+        $doneAt = Carbon::parse('2026-10-02 08:00:00');
+        $dueAt = Carbon::parse('2026-10-04 08:00:00');
+
+        $active = ProvisioningRules::syncAction(
+            'done',
+            $doneAt,
+            null,
+            $dueAt,
+            12,
+            $dueAt->copy()
+        );
+
+        $this->assertSame('active', $active['status']);
+        $this->assertSame(['completed', 'active'], $active['events']);
     }
 
     public function test_webdev_checkpoint_waits_24_hours(): void

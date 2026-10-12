@@ -109,11 +109,16 @@ class ProvisioningRules
         return $latest;
     }
 
+    public static function isSettledStatus(?string $status): bool
+    {
+        return in_array(strtolower(trim((string) $status)), ['done', 'completed', 'active'], true);
+    }
+
     /**
      * Promote an action without touching the order's provisioning status.
      *
-     * Completed requires Done recorded inside the assigned countdown.
-     * Active requires that completion, then the 12h or 24h checkpoint.
+     * Done recorded by support becomes Completed.
+     * Active follows either the 12h/24h checkpoint or the finished countdown.
      *
      * @return array{status: string, completedAt: ?Carbon, validatedAt: ?Carbon, events: array<int, string>}
      */
@@ -138,9 +143,7 @@ class ProvisioningRules
             ];
         }
 
-        $withinCountdown = $dueAt !== null && $doneAt->lessThanOrEqualTo($dueAt);
-
-        if (in_array($status, ['done', 'pending'], true) && $withinCountdown) {
+        if (in_array($status, ['done', 'pending'], true)) {
             $status = 'completed';
             $completedAt = $completedAt ?? $doneAt->copy();
             $events[] = 'completed';
@@ -150,13 +153,11 @@ class ProvisioningRules
             ? $checkpointHours
             : self::CHECKPOINT_STANDARD;
 
-        if (
-            $status === 'completed'
-            && $completedAt !== null
-            && $dueAt !== null
-            && $completedAt->lessThanOrEqualTo($dueAt)
-            && $now->greaterThanOrEqualTo($completedAt->copy()->addHours($checkpointHours))
-        ) {
+        $countdownElapsed = $dueAt !== null && $now->greaterThanOrEqualTo($dueAt);
+        $checkpointReached = $completedAt !== null
+            && $now->greaterThanOrEqualTo($completedAt->copy()->addHours($checkpointHours));
+
+        if ($status === 'completed' && $completedAt !== null && ($countdownElapsed || $checkpointReached)) {
             $status = 'active';
             $validatedAt = $now->copy();
             $events[] = 'active';

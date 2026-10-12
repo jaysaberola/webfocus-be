@@ -32,6 +32,7 @@ use App\Services\PaynamicsService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 
 class CustomerPortalController extends Controller
@@ -44,13 +45,13 @@ class CustomerPortalController extends Controller
 
         $services = CustomerService::query()
             ->where('customer_id', $customer->id)
-            ->with('salesTransaction')
+            ->with('salesTransaction.provisioningRun')
             ->orderByDesc('updated_at')
             ->get();
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with('items')
+            ->with(['items', 'provisioningRun'])
             ->latest('transacted_at')
             ->get();
 
@@ -96,10 +97,12 @@ class CustomerPortalController extends Controller
     public function services(Request $request)
     {
         $customer = $this->resolveCustomer($request);
+        app(ProvisioningWorkflow::class)->syncOpenForCustomer($customer->id);
+        app(CustomerPortalProvisioner::class)->activateReadyForCustomer($customer->id);
 
         $services = CustomerService::query()
             ->where('customer_id', $customer->id)
-            ->with('salesTransaction')
+            ->with('salesTransaction.provisioningRun')
             ->orderByDesc('updated_at')
             ->get()
             ->map(fn (CustomerService $service) => $this->mapService($service))
@@ -112,15 +115,19 @@ class CustomerPortalController extends Controller
     {
         $customer = $this->resolveCustomer($request);
 
+        $with = [
+            'items',
+            'paynamicsPaymentReferences',
+            'paymentProofs',
+        ];
+        if (Schema::hasTable('provisioning_runs')) {
+            $with[] = 'provisioningRun.actions.assignee:id,fname,lname,email';
+            $with[] = 'provisioningRun.webdevStarter:id,fname,lname,email';
+        }
+
         $orders = SalesTransaction::query()
             ->where('customer_id', $customer->id)
-            ->with([
-                'items',
-                'paynamicsPaymentReferences',
-                'paymentProofs',
-                'provisioningRun.actions.assignee:id,fname,lname,email',
-                'provisioningRun.webdevStarter:id,fname,lname,email',
-            ])
+            ->with($with)
             ->latest('created_at')
             ->latest('id')
             ->get()
@@ -1275,6 +1282,12 @@ class CustomerPortalController extends Controller
         $priced = DealMeta::applyLineAdjustments($items, $row);
         $items = $priced['items'];
         $amount = WebDesignQuotation::displayAmount($row);
+        $provisioning = app(ProvisioningWorkflow::class)->customerView($row);
+        $row->refresh();
+        $row->load(['items', 'provisioningRun', 'paymentProofs']);
+        app(CustomerPortalProvisioner::class)->activateIfReady($row);
+        $row->refresh();
+        $row->load(['provisioningRun', 'paymentProofs']);
         $status = CustomerPortalProvisioner::resolveServiceStatus($row);
         $paid = in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         $canCheckout = $status === CustomerPortalProvisioner::STATUS_PENDING
@@ -1310,7 +1323,7 @@ class CustomerPortalController extends Controller
             'gateway' => $this->extractPaymentMethod($row),
             'paymentDate' => RelatedPaymentSync::dateFrom($row),
             'approvedAt' => CustomerPortalProvisioner::approvedAt($row),
-            'provisioning' => app(ProvisioningWorkflow::class)->customerView($row),
+            'provisioning' => $provisioning,
             'paymentMode' => RelatedPaymentSync::modeFrom($row) ?: ($paid ? $this->extractPaymentMethod($row) : null),
             'canCheckout' => $canCheckout,
             'canCancel' => in_array($status, [
