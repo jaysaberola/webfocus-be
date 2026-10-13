@@ -27,6 +27,16 @@ class WebDesignMetaTest extends TestCase
         );
     }
 
+    public function test_ignores_chat_attachment_filenames_as_included_services(): void
+    {
+        $notes = "[WEBDESIGN_META]{\"serviceFeatures\":[\"Members Portal\",\"image.png\"]}\n";
+
+        $this->assertSame(
+            ['Members Portal'],
+            WebDesignMeta::additionalServices($notes)
+        );
+    }
+
     public function test_expands_extras_as_priced_rows_under_the_web_design_package(): void
     {
         $items = [
@@ -134,6 +144,21 @@ class WebDesignMetaTest extends TestCase
             'Need a members login',
             WebDesignMeta::clientNotes('[WEBDESIGN_META]{"clientNotes":"Need a members login","serviceFeatures":[]}')
         );
+    }
+
+    public function test_conversation_writes_and_reads_deal_meta_fallback(): void
+    {
+        $notes = WebDesignMeta::withConversation(
+            '[DEAL_META]{"clientNotes":"Need a contact form","salesNotes":"Price is 12,000"}',
+            'Need a contact form',
+            'Price is 12,000'
+        );
+
+        $this->assertSame('Need a contact form', WebDesignMeta::clientNotes($notes));
+        $this->assertSame('Price is 12,000', WebDesignMeta::salesNotes($notes));
+        $this->assertSame('Need a contact form', WebDesignMeta::inboxFields($notes)['Notes']);
+        $this->assertSame('Price is 12,000', WebDesignMeta::inboxFields($notes)['Sales reply']);
+        $this->assertStringContainsString('[WEBDESIGN_META]', $notes);
     }
 
     public function test_reads_sales_notes_and_inbox_sales_reply(): void

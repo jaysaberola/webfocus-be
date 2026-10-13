@@ -16,11 +16,13 @@ class CustomerService extends Model
         'status',
         'renew_label',
         'renew_at',
+        'expires_at',
         'renew_note',
     ];
 
     protected $casts = [
         'renew_at' => 'datetime',
+        'expires_at' => 'datetime',
     ];
 
     public function customer(): BelongsTo

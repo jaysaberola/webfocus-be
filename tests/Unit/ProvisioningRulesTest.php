@@ -36,6 +36,25 @@ class ProvisioningRulesTest extends TestCase
         $this->assertSame(12, ProvisioningRules::checkpointFor('standard'));
     }
 
+    public function test_bare_metal_orders_are_excluded_from_the_48_hour_turnaround(): void
+    {
+        $bareMetal = ProvisioningRules::timelineFor([
+            ['name' => 'BAREMETAL LINUX', 'item_type' => 'service'],
+        ], false);
+        $dedicated = ProvisioningRules::timelineFor([
+            ['name' => 'DEDICATED ESSENTIAL', 'item_type' => 'service'],
+        ], false);
+        $mixed = ProvisioningRules::timelineFor([
+            ['name' => 'DEDICATED ESSENTIAL', 'item_type' => 'service'],
+            ['name' => 'BAREMETAL LINUX', 'item_type' => 'service'],
+        ], false);
+
+        $this->assertNull($bareMetal['durationHours']);
+        $this->assertSame(48, $dedicated['durationHours']);
+        $this->assertSame(48, $mixed['durationHours']);
+        $this->assertSame(0, ProvisioningRules::standardHours('Dedicated Bare Metal Enterprise'));
+    }
+
     public function test_done_inside_the_countdown_becomes_completed_then_active_after_the_checkpoint(): void
     {
         $doneAt = Carbon::parse('2026-10-02 08:00:00');

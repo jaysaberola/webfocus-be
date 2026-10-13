@@ -36,7 +36,7 @@ class ProvisioningWorkflow
         $transaction->loadMissing('items');
         $plan = ProvisioningRules::timelineFor($transaction->items, WebDesignQuotation::isWebDesign($transaction));
         $now = now();
-        $startsNow = $plan['timeline'] !== 'webdev';
+        $startsNow = $plan['timeline'] !== 'webdev' && ! empty($plan['durationHours']);
 
         return DB::transaction(function () use ($transaction, $actor, $proofNo, $plan, $now, $startsNow) {
             $run = ProvisioningRun::create([
@@ -65,7 +65,7 @@ class ProvisioningWorkflow
                         ['label' => 'Countdown', 'from' => 'Not started', 'to' => "{$hours} hours"],
                     ]
                 );
-            } else {
+            } elseif ($plan['timeline'] === 'webdev') {
                 $this->record(
                     $run,
                     $actor,
@@ -73,6 +73,16 @@ class ProvisioningWorkflow
                     'Provisioning started. The WebDev countdown waits for Sales/Production (30–90 days).',
                     [
                         ['label' => 'WebDev countdown', 'from' => 'Not started', 'to' => 'Waiting for Sales/Production'],
+                    ]
+                );
+            } else {
+                $this->record(
+                    $run,
+                    $actor,
+                    'provisioning_started',
+                    'Provisioning started. Bare metal orders are excluded from the 48-hour turnaround.',
+                    [
+                        ['label' => 'Countdown', 'from' => '48 hours', 'to' => 'Not required'],
                     ]
                 );
             }
@@ -533,7 +543,19 @@ class ProvisioningWorkflow
             ];
         }
 
-        $hours = (int) ($run->duration_hours ?: ProvisioningRules::STANDARD_HOURS);
+        if (! $run->duration_hours) {
+            return [
+                'started' => false,
+                'startedAt' => null,
+                'endsAt' => null,
+                'durationHours' => null,
+                'durationDays' => null,
+                'startedBy' => null,
+                'label' => 'Bare metal orders are excluded from the 48-hour turnaround',
+            ];
+        }
+
+        $hours = (int) $run->duration_hours;
         if (! $run->countdown_started_at) {
             return [
                 'started' => false,

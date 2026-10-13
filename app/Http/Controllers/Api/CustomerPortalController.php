@@ -14,6 +14,7 @@ use App\Models\SalesTransactionItem;
 use App\Models\SalesTransactionProposal;
 use App\Models\Service;
 use App\Models\User;
+use App\Support\DealConversationFile;
 use App\Support\DealMeta;
 use App\Support\ProvisioningRules;
 use App\Support\PendingCheckoutGuard;
@@ -200,6 +201,144 @@ class CustomerPortalController extends Controller
         return response()->json([
             'message' => 'Order cancelled.',
             'data' => $this->mapOrder($salesTransaction->fresh(['items', 'paynamicsPaymentReferences'])),
+        ]);
+    }
+
+    public function downloadConversationFile(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+
+        return DealConversationFile::download(
+            $salesTransaction,
+            (string) $request->query('path', $request->query('name', '')),
+            $request->boolean('download')
+        );
+    }
+
+    public function conversation(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+
+        $notes = $salesTransaction->notes;
+
+        return response()->json([
+            'data' => [
+                'recordId' => $salesTransaction->id,
+                'notes' => $notes,
+                'clientNotes' => DealMeta::clientNotes($notes) ?: WebDesignMeta::clientNotes($notes),
+                'salesNotes' => DealMeta::salesNotes($notes) ?: WebDesignMeta::salesNotes($notes),
+                'conversation' => DealMeta::conversation($notes),
+                'quotedPrice' => DealMeta::quotedPrice($notes),
+            ],
+        ]);
+    }
+
+    public function replyOrder(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+
+        $validated = $request->validate([
+            'message' => ['nullable', 'string', 'max:2000'],
+            'file' => ['nullable', 'file', 'mimes:pdf,doc,docx,png,jpg,jpeg', 'max:10240'],
+        ]);
+
+        $message = trim((string) ($validated['message'] ?? ''));
+        abort_if($message === '' && ! $request->hasFile('file'), 422, 'Enter a message or attach a file.');
+
+        $fileMeta = null;
+        if ($request->hasFile('file')) {
+            $fileMeta = DealConversationFile::store(
+                $salesTransaction,
+                $request->file('file'),
+                'client',
+                (int) $customer->id
+            );
+        }
+
+        $salesTransaction->update([
+            'notes' => DealMeta::appendClientNote($salesTransaction->notes, $message, $fileMeta),
+        ]);
+
+        $fresh = $salesTransaction->fresh(['items', 'paynamicsPaymentReferences']);
+        $isWebDesign = $fresh ? WebDesignQuotation::isWebDesign($fresh) : false;
+        $itemNames = $isWebDesign
+            ? WebDesignMeta::packageItemLine($fresh?->items, $fresh?->notes)
+            : TransactionLabelResolver::planLabel($fresh?->items, $fresh?->transaction_no);
+        $clientLabel = trim(($customer->mname ?: '') !== ''
+            ? (string) $customer->mname
+            : (string) $customer->full_name);
+        $thread = DealMeta::conversation($fresh?->notes);
+        $latest = $thread !== [] ? (string) ($thread[array_key_last($thread)]['text'] ?? $message) : $message;
+        $body = "{$clientLabel} replied on {$fresh?->transaction_no}"
+            .($itemNames ? " ({$itemNames})" : '')
+            .'. Reply: '.$latest;
+
+        CustomerNotification::query()->updateOrCreate(
+            [
+                'customer_id' => $customer->id,
+                'reference_key' => 'deal-customer-reply:'.$salesTransaction->id,
+            ],
+            [
+                'title' => $isWebDesign ? 'Your quotation reply was sent' : 'Your deal reply was sent',
+                'body' => $isWebDesign
+                    ? 'You replied on '.$fresh?->transaction_no.'. Sales can continue the price conversation until the quotation is approved.'
+                    : 'You replied on '.$fresh?->transaction_no.'. Sales and admin can continue this conversation.',
+                'type' => 'order',
+                'action_url' => '/public/dashboard?tab=orders',
+                'read_at' => null,
+            ]
+        );
+
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $customer->id,
+            ['sales_admin', 'admin', 'sales_staff', 'customer_care'],
+            'deal-customer-reply:'.$salesTransaction->id,
+            $isWebDesign ? 'Customer replied about the quotation price' : 'Customer replied to a deal',
+            $body,
+            'deal_reply',
+            '/public/commerce-admin?tab=orders',
+        );
+
+        if (($fileMeta['kind'] ?? '') === 'signed') {
+            $assigneeId = $fresh?->client_owner_id ?: $fresh?->user_id;
+            app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+                (int) $customer->id,
+                ['sales_admin', 'admin'],
+                'admin:webdesign-signed:'.$salesTransaction->id,
+                'Signed Proposal Uploaded',
+                $clientLabel
+                    .' uploaded the signed proposal for '
+                    .$fresh?->transaction_no
+                    .'. You can now proceed to payment.',
+                'web_design_quotation',
+                '/public/commerce-admin?tab=orders',
+                false,
+            );
+            if ($assigneeId) {
+                CustomerNotification::query()->updateOrCreate(
+                    [
+                        'customer_id' => $assigneeId,
+                        'reference_key' => 'admin:webdesign-signed:'.$salesTransaction->id,
+                    ],
+                    [
+                        'title' => 'Signed Proposal Uploaded',
+                        'body' => 'The client signed and re-uploaded the proposal for '
+                            .$fresh?->transaction_no
+                            .'. Click Proceed Payment in Orders.',
+                        'type' => 'web_design_quotation',
+                        'action_url' => '/public/commerce-admin?tab=orders',
+                        'read_at' => null,
+                    ]
+                );
+            }
+        }
+
+        return response()->json([
+            'message' => 'Reply sent.',
+            'data' => $this->mapOrder($fresh),
         ]);
     }
 
@@ -592,9 +731,17 @@ class CustomerPortalController extends Controller
         ]);
 
         $transaction->update([
-            'notes' => WebDesignQuotation::appendMarker(
-                $transaction->notes,
-                WebDesignQuotation::PROPOSAL_SIGNED
+            'notes' => DealMeta::appendClientNote(
+                WebDesignQuotation::appendMarker(
+                    $transaction->notes,
+                    WebDesignQuotation::PROPOSAL_SIGNED
+                ),
+                '',
+                [
+                    'name' => $file->getClientOriginalName(),
+                    'url' => StorageUrl::publicAsset($path) ?: '',
+                    'kind' => 'signed',
+                ]
             ),
         ]);
 
@@ -661,7 +808,7 @@ class CustomerPortalController extends Controller
             $key = (string) $row->reference_key;
             if (preg_match('/^(?:provisioning|activated):service:(\d+)$/', $key, $match)) {
                 $serviceIds[] = (int) $match[1];
-            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|order-provisioned:|webdesign-quotation(?:-priced|-reply)?:|webdesign-proposal:)(\d+)$/', $key, $match)) {
+            } elseif (preg_match('/^(?:payment:transaction:|paynamics-proof:|order-provisioned:|webdesign-quotation(?:-priced|-reply)?:|webdesign-proposal:|deal-reply:|deal-customer-reply:)(\d+)$/', $key, $match)) {
                 $transactionIds[] = (int) $match[1];
             }
             if (preg_match('/\b(ST-\d{8}-\d+)\b/', (string) $row->body, $match)) {
@@ -1301,6 +1448,9 @@ class CustomerPortalController extends Controller
                 ->pluck('name')
                 ->first(fn ($name) => TransactionLabelResolver::looksLikeDomain($name));
 
+        $paymentDue = TransactionLabelResolver::dueDateFrom($row->transacted_at);
+        $subscriptionEnd = DealMeta::clientSubscriptionEnd($row->notes)?->format('Y-m-d');
+
         return [
             'id' => $row->transaction_no,
             'recordId' => $row->id,
@@ -1310,8 +1460,13 @@ class CustomerPortalController extends Controller
             'domain' => $domain ?: null,
             'date' => TransactionLabelResolver::issuedDateFrom($row->transacted_at),
             'createdAt' => optional($row->created_at)?->toIso8601String(),
-            'dueDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
-            'expiredDate' => TransactionLabelResolver::dueDateFrom($row->transacted_at),
+            'dueDate' => $subscriptionEnd ?: $paymentDue,
+            'expiredDate' => $subscriptionEnd ?: $paymentDue,
+            'clientNotes' => DealMeta::clientNotes($row->notes) ?: WebDesignMeta::clientNotes($row->notes),
+            'salesNotes' => DealMeta::salesNotes($row->notes) ?: WebDesignMeta::salesNotes($row->notes),
+            'conversation' => DealMeta::conversation($row->notes),
+            'quotedPrice' => DealMeta::quotedPrice($row->notes)
+                ?: (WebDesignQuotation::isWebDesign($row) ? round((float) $row->grand_total, 2) : 0),
             'total' => $amount,
             'grandTotal' => $amount,
             'subtotal' => $priced['subtotal'],
@@ -1462,8 +1617,9 @@ class CustomerPortalController extends Controller
     ): array {
         $key = (string) $row->reference_key;
         $type = (string) ($row->type ?: 'general');
-        $intro = (string) $row->body;
-        $desc = (string) $row->body;
+        $title = CustomerPortalNotificationSync::customerNoticeTitle((string) $row->title);
+        $intro = CustomerPortalNotificationSync::customerNoticeBody((string) $row->body);
+        $desc = $intro;
         $details = [];
         $attachments = [];
         $proposalSign = null;
@@ -1570,7 +1726,7 @@ class CustomerPortalController extends Controller
 
         if ($details === []) {
             $webDesignOrder = null;
-            if (preg_match('/^webdesign-quotation(?:-priced|-reply)?:(\d+)$/', $key, $match)) {
+            if (preg_match('/^(?:webdesign-quotation(?:-priced|-reply)?|webdesign-proposal|deal-reply|deal-customer-reply):(\d+)$/', $key, $match)) {
                 $webDesignOrder = $transactions->get((int) $match[1]);
             } elseif (
                 stripos($row->title, 'web design') !== false
@@ -1581,23 +1737,37 @@ class CustomerPortalController extends Controller
 
             if ($webDesignOrder) {
                 $itemNames = WebDesignMeta::packageItemLine($webDesignOrder->items, $webDesignOrder->notes);
-                $inboxFields = WebDesignMeta::inboxFields($webDesignOrder->notes);
-                $pricedAmount = WebDesignQuotation::displayAmount($webDesignOrder);
-                $isReply = str_contains($key, 'webdesign-quotation-reply:');
-                $intro = $isReply
-                    ? 'Sales replied to your quotation request '
+                $pricedAmount = DealMeta::quotedPrice($webDesignOrder->notes)
+                    ?: round((float) $webDesignOrder->grand_total, 2)
+                    ?: WebDesignQuotation::displayAmount($webDesignOrder);
+                $isCustomerReply = str_starts_with($key, 'deal-customer-reply:');
+                $isReply = str_contains($key, 'webdesign-quotation-reply:') || str_starts_with($key, 'deal-reply:') || $isCustomerReply;
+                $isPriced = str_contains($key, 'webdesign-quotation-priced:');
+                $intro = $isPriced && trim((string) $row->body) !== ''
+                    ? (string) $row->body
+                    : ($isCustomerReply
+                    ? 'You replied on '
+                        .$webDesignOrder->transaction_no
+                        .($itemNames ? " ({$itemNames})" : '')
+                        .'. Sales can continue this price conversation until the quotation is approved.'
+                    : ($isReply
+                    ? 'Sales replied to your '
+                        .(str_starts_with($key, 'deal-reply:') ? 'deal ' : 'quotation request ')
                         .$webDesignOrder->transaction_no
                         .($itemNames ? " ({$itemNames})" : '')
                         .'.'
                     : ($pricedAmount > 0
-                    ? 'Sales set quotation amounts for '
-                        .$webDesignOrder->transaction_no
-                        .($itemNames ? " ({$itemNames})" : '')
-                        .'. Status is still Pending Quotation until the proposal is signed and payment is requested.'
+                    ? DealMeta::quoteSummary($pricedAmount, $webDesignOrder->notes, [
+                        'orderNo' => (string) $webDesignOrder->transaction_no,
+                        'items' => $webDesignOrder->items,
+                        'subtotal' => (float) $webDesignOrder->subtotal,
+                        'discount' => (float) $webDesignOrder->discount_total,
+                        'tax' => (float) $webDesignOrder->tax_total,
+                    ])
                     : 'Your web design quotation request '
                         .$webDesignOrder->transaction_no
                         .($itemNames ? " ({$itemNames})" : '')
-                        .' was sent to Sales. Status is Pending Quotation until the proposal is ready.');
+                        .' was sent to Sales. Status is Pending Quotation until the proposal is ready.')));
                 $desc = $intro;
                 $details = $this->portalInboxDetails([
                     'Order No' => $webDesignOrder->transaction_no,
@@ -1617,8 +1787,6 @@ class CustomerPortalController extends Controller
                     $details = array_merge($details, $lineRows);
                 }
                 $details = array_merge($details, $this->portalInboxDetails([
-                    'Notes' => $inboxFields['Notes'],
-                    'Sales reply' => $inboxFields['Sales reply'] ?? '',
                     'Amount' => '₱'.number_format((float) $pricedAmount, 2),
                     'Status' => 'Pending Quotation',
                     'Received' => optional($row->created_at)->format('M j, Y g:i A'),
@@ -1686,26 +1854,47 @@ class CustomerPortalController extends Controller
             ]);
         }
 
+        $replyOrder = null;
+        if (preg_match('/^(?:webdesign-quotation(?:-priced|-reply)?|webdesign-proposal|deal-reply|deal-customer-reply):(\d+)$/', $key, $match)) {
+            $found = $transactions->get((int) $match[1]);
+            $replyOrder = $found instanceof SalesTransaction ? $found : null;
+        }
+
         return [
             'id' => $row->id,
-            'title' => $row->title,
+            'title' => $title,
             'desc' => $desc,
             'intro' => $intro,
             'date' => optional($row->created_at)->format('Y-m-d'),
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'unread' => $row->read_at === null,
             'type' => $type,
-            'actionUrl' => str_starts_with($key, 'webdesign-quotation')
+            'actionUrl' => str_starts_with($key, 'webdesign-quotation') || str_starts_with($key, 'deal-reply') || str_starts_with($key, 'deal-customer-reply')
                 ? '/public/dashboard?tab=orders'
                 : $row->action_url,
             'actionLabel' => str_starts_with($key, 'webdesign-quotation')
                 ? 'View Pending Quotation'
-                : $this->portalInboxActionLabel($row->action_url, $type),
+                : (str_starts_with($key, 'deal-reply') || str_starts_with($key, 'deal-customer-reply')
+                    ? 'View Order'
+                    : $this->portalInboxActionLabel($row->action_url, $type)),
             'fromName' => 'WebFocus',
             'fromEmail' => null,
             'attachments' => array_values(array_filter($attachments)),
             'details' => $details,
             'proposalSign' => $proposalSign,
+            'canReply' => $replyOrder !== null,
+            'recordId' => $replyOrder?->id,
+            'clientNotes' => $replyOrder
+                ? (DealMeta::clientNotes($replyOrder->notes) ?: WebDesignMeta::clientNotes($replyOrder->notes))
+                : null,
+            'salesNotes' => $replyOrder
+                ? (DealMeta::salesNotes($replyOrder->notes) ?: WebDesignMeta::salesNotes($replyOrder->notes))
+                : null,
+            'conversation' => $replyOrder ? DealMeta::conversation($replyOrder->notes) : [],
+            'quotedPrice' => $replyOrder
+                ? (DealMeta::quotedPrice($replyOrder->notes)
+                    ?: (WebDesignQuotation::isWebDesign($replyOrder) ? round((float) $replyOrder->grand_total, 2) : 0))
+                : 0,
         ];
     }
 

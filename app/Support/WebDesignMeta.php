@@ -37,11 +37,24 @@ class WebDesignMeta
         $features = [];
         if (isset($meta['serviceFeatures']) && is_array($meta['serviceFeatures'])) {
             $features = $meta['serviceFeatures'];
-        } elseif (preg_match('/Additional Services:\s*(.+)/i', (string) $notes, $match)) {
+        } elseif (preg_match('/^Additional Services:\s*(.+)$/im', (string) $notes, $match)) {
             $features = explode(',', $match[1]);
         }
 
         return self::uniqueLabels($features);
+    }
+
+    public static function isAttachmentLabel(?string $label): bool
+    {
+        $text = trim((string) $label);
+        if ($text === '') {
+            return false;
+        }
+        if (preg_match('/^sent an (attachment|proposal quotation|signed proposal):/i', $text)) {
+            return true;
+        }
+
+        return (bool) preg_match('/\.(png|jpe?g|gif|webp|bmp|svg|pdf|docx?|xlsx?|pptx?|zip|rar|7z)$/i', $text);
     }
 
     public static function clientNotes(?string $notes): string
@@ -86,6 +99,30 @@ class WebDesignMeta
         return trim((string) (self::parse($notes)['salesNotes'] ?? ''));
     }
 
+    public static function withConversation(?string $notes, ?string $clientNotes, ?string $salesNotes): string
+    {
+        $text = (string) $notes;
+        $meta = self::parse($text);
+        if ($clientNotes !== null) {
+            $value = trim($clientNotes);
+            if ($value === '') {
+                unset($meta['clientNotes']);
+            } else {
+                $meta['clientNotes'] = $value;
+            }
+        }
+        if ($salesNotes !== null) {
+            $value = trim($salesNotes);
+            if ($value === '') {
+                unset($meta['salesNotes']);
+            } else {
+                $meta['salesNotes'] = $value;
+            }
+        }
+
+        return self::replaceMeta($text, $meta);
+    }
+
     /**
      * @return array{Included services: string, Notes: string, Sales reply: string}
      */
@@ -93,8 +130,8 @@ class WebDesignMeta
     {
         return [
             'Included services' => implode(', ', self::additionalServices($notes)),
-            'Notes' => self::clientNotes($notes),
-            'Sales reply' => self::salesNotes($notes),
+            'Notes' => self::clientNotes($notes) ?: DealMeta::clientNotes($notes),
+            'Sales reply' => self::salesNotes($notes) ?: DealMeta::salesNotes($notes),
         ];
     }
 
@@ -117,7 +154,7 @@ class WebDesignMeta
 
     public static function inboxPreviewSuffix(?string $notes): string
     {
-        $text = trim((string) preg_replace('/\s+/', ' ', self::clientNotes($notes)));
+        $text = trim((string) preg_replace('/\s+/', ' ', self::inboxFields($notes)['Notes']));
         if ($text === '') {
             return '';
         }
@@ -208,7 +245,11 @@ class WebDesignMeta
                 if ($label === '' || strcasecmp($label, 'additional service') === 0) {
                     $label = trim((string) ($item['name'] ?? ''));
                 }
-                if ($label !== '' && strcasecmp($label, 'additional service') !== 0) {
+                if (
+                    $label !== ''
+                    && strcasecmp($label, 'additional service') !== 0
+                    && ! self::isAttachmentLabel($label)
+                ) {
                     $extras[] = $label;
                     $addonByName[strtolower($label)] = $item;
                 }
@@ -369,7 +410,7 @@ class WebDesignMeta
         $unique = [];
         foreach ($labels as $feature) {
             $label = trim((string) $feature);
-            if ($label === '' || strcasecmp($label, 'none selected') === 0) {
+            if ($label === '' || strcasecmp($label, 'none selected') === 0 || self::isAttachmentLabel($label)) {
                 continue;
             }
             $key = strtolower($label);
@@ -381,6 +422,29 @@ class WebDesignMeta
         }
 
         return $unique;
+    }
+
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private static function replaceMeta(string $notes, array $meta): string
+    {
+        $encoded = json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $metaLine = self::PREFIX.($encoded === false ? '{}' : $encoded);
+        $marker = strpos($notes, self::PREFIX);
+        if ($marker === false) {
+            return trim($notes === '' ? $metaLine : $notes."\n".$metaLine);
+        }
+
+        $before = trim(substr($notes, 0, $marker));
+        $afterMarker = substr($notes, $marker + strlen(self::PREFIX));
+        $newline = strpos($afterMarker, "\n");
+        $after = $newline === false ? '' : trim(substr($afterMarker, $newline + 1));
+
+        return implode("\n", array_values(array_filter(
+            [$before, $metaLine, $after],
+            fn ($part) => $part !== ''
+        )));
     }
 
     private static function isNotesTerminator(string $line): bool

@@ -7,6 +7,7 @@ use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
 use App\Models\ProvisioningRun;
 use App\Models\SalesTransaction;
+use App\Support\DealMeta;
 use App\Support\ProvisioningRules;
 use App\Support\WebDesignQuotation;
 use Carbon\Carbon;
@@ -33,9 +34,8 @@ class CustomerPortalProvisioner
 
         foreach ($transaction->items as $item) {
             $category = $this->resolveCategory($item->name, $item->item_type);
-            $renewAt = self::isActiveStatus($status)
-                ? ($transaction->transacted_at?->copy()->addYear() ?? now()->addYear())
-                : null;
+            $renewAt = self::clientRenewAt($transaction, $status);
+            $expiresAt = DealMeta::financeExpirationDate($transaction->notes);
 
             CustomerService::create([
                 'customer_id' => $transaction->customer_id,
@@ -46,6 +46,7 @@ class CustomerPortalProvisioner
                 'status' => $status,
                 'renew_label' => $renewAt ? 'Renews' : 'Renewal Schedule',
                 'renew_at' => $renewAt,
+                'expires_at' => $expiresAt,
                 'renew_note' => CustomerPortalProvisioner::formatRenewNote($renewAt),
             ]);
         }
@@ -80,9 +81,8 @@ class CustomerPortalProvisioner
                 ->where('title', $item->name)
                 ->first();
 
-            $renewAt = self::isActiveStatus($status)
-                ? ($transaction->transacted_at?->copy()->addYear() ?? now()->addYear())
-                : null;
+            $renewAt = self::clientRenewAt($transaction, $status);
+            $expiresAt = DealMeta::financeExpirationDate($transaction->notes);
 
             $payload = [
                 'category' => $this->resolveCategory($item->name, $item->item_type),
@@ -90,6 +90,7 @@ class CustomerPortalProvisioner
                 'status' => $status,
                 'renew_label' => $renewAt ? 'Renews' : 'Renewal Schedule',
                 'renew_at' => $renewAt,
+                'expires_at' => $expiresAt,
                 'renew_note' => self::formatRenewNote($renewAt),
             ];
 
@@ -382,6 +383,17 @@ class CustomerPortalProvisioner
             self::STATUS_ACTIVE => 'Your services are now active.',
             default => 'Provisioning begins after payment is confirmed.',
         };
+    }
+
+    public static function clientRenewAt(SalesTransaction $transaction, ?string $status = null): ?Carbon
+    {
+        $resolved = $status ?? self::resolveServiceStatus($transaction);
+        if (! self::isActiveStatus($resolved)) {
+            return null;
+        }
+
+        return DealMeta::clientSubscriptionEnd($transaction->notes)
+            ?? ($transaction->transacted_at?->copy()->addYear() ?? now()->addYear());
     }
 
     public static function formatRenewDate(?Carbon $renewAt): ?string

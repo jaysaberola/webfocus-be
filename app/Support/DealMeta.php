@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\DomainCategory;
 use App\Models\SalesTransaction;
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Throwable;
 
@@ -362,5 +363,538 @@ class DealMeta
             'discount' => 0,
             'tax' => 0,
         ];
+    }
+
+    public static function clientNotes(?string $notes): string
+    {
+        return trim((string) (self::parse($notes)['clientNotes'] ?? ''));
+    }
+
+    public static function salesNotes(?string $notes): string
+    {
+        return trim((string) (self::parse($notes)['salesNotes'] ?? ''));
+    }
+
+    public static function quotedPrice(?string $notes): float
+    {
+        $value = round((float) (self::parse($notes)['quotedPrice'] ?? 0), 2);
+
+        return $value > 0 ? $value : 0.0;
+    }
+
+    /**
+     * @param  array{orderNo?: string, items?: iterable<mixed>, subtotal?: float, discount?: float, tax?: float}  $context
+     */
+    public static function pinQuotedPrice(?string $notes, float $amount, array $context = []): string
+    {
+        $amount = round($amount, 2);
+        if ($amount <= 0) {
+            return (string) $notes;
+        }
+
+        $current = self::quotedPrice($notes);
+        $text = (string) $notes;
+        $meta = self::parse($text);
+        $meta['quotedPrice'] = $amount;
+        $text = self::replaceMeta($text === '' && $meta === [] ? '[DEAL_META]{}' : $text, $meta);
+        if (abs($current - $amount) < 0.01) {
+            return $text;
+        }
+
+        return self::appendSalesNote($text, self::quoteSummary($amount, $text, $context));
+    }
+
+    /**
+     * @param  array{orderNo?: string, items?: iterable<mixed>, subtotal?: float, discount?: float, tax?: float}  $context
+     */
+    public static function quoteSummary(float $amount, ?string $notes = null, array $context = []): string
+    {
+        $peso = static fn (float $value) => '₱'.number_format($value, 2);
+        $orderNo = trim((string) ($context['orderNo'] ?? ''));
+        $lines = [
+            'A quoted price is ready'.($orderNo !== '' ? ' for '.$orderNo : '').'.',
+        ];
+
+        $dealName = trim((string) (self::parse($notes)['dealName'] ?? self::parse($notes)['productName'] ?? ''));
+        $category = self::productCategory($notes);
+        if ($dealName !== '' || $category !== '') {
+            $lines[] = '';
+            if ($dealName !== '') {
+                $lines[] = 'Deal: '.$dealName;
+            }
+            if ($category !== '' && strcasecmp($category, $dealName) !== 0) {
+                $lines[] = 'Category: '.$category;
+            }
+        }
+
+        $rows = WebDesignMeta::amountDetailRows($context['items'] ?? [], $notes);
+        if ($rows === []) {
+            foreach (WebDesignMeta::additionalServices($notes) as $feature) {
+                $rows[] = ['label' => 'Included service', 'value' => $feature];
+            }
+        }
+        if ($rows !== []) {
+            $lines[] = '';
+            $lines[] = 'Services';
+            foreach ($rows as $row) {
+                $label = trim((string) ($row['label'] ?? 'Items'));
+                $value = trim((string) ($row['value'] ?? ''));
+                if ($value === '') {
+                    continue;
+                }
+                $lines[] = $label === 'Included service'
+                    ? '• '.$value.(str_contains($value, '₱') ? '' : ' — included')
+                    : '• '.$value;
+            }
+        }
+
+        $subtotal = round((float) ($context['subtotal'] ?? 0), 2);
+        $discount = round((float) ($context['discount'] ?? 0), 2);
+        $tax = round((float) ($context['tax'] ?? 0), 2);
+        $lines[] = '';
+        if ($subtotal > 0) {
+            $lines[] = 'Subtotal: '.$peso($subtotal);
+        }
+        if ($discount > 0) {
+            $lines[] = 'Discount: '.$peso($discount);
+        }
+        if ($tax > 0) {
+            $lines[] = 'Tax: '.$peso($tax);
+        }
+        $lines[] = 'Grand total: '.$peso($amount);
+        $lines[] = '';
+        $lines[] = 'Status is still Pending Quotation. You can review every line here and keep talking about this price. Payment is requested only after the proposal is signed.';
+
+        return trim(implode("\n", $lines));
+    }
+
+    public static function withConversation(?string $notes, ?string $clientNotes, ?string $salesNotes): string
+    {
+        $text = (string) $notes;
+        $meta = self::parse($text);
+        if ($clientNotes !== null) {
+            $value = trim($clientNotes);
+            if ($value === '') {
+                unset($meta['clientNotes']);
+            } else {
+                $meta['clientNotes'] = $value;
+            }
+        }
+        if ($salesNotes !== null) {
+            $value = trim($salesNotes);
+            if ($value === '') {
+                unset($meta['salesNotes']);
+            } else {
+                $meta['salesNotes'] = $value;
+            }
+        }
+
+        return self::replaceMeta($text, $meta);
+    }
+
+    /**
+     * @return list<array{from: string, text: string, at?: string, file?: array{name: string, url: string, kind: string}}>
+     */
+    public static function conversation(?string $notes): array
+    {
+        $meta = self::parse($notes);
+        $raw = $meta['conversation'] ?? null;
+        if (is_array($raw) && $raw !== []) {
+            return self::normalizeConversation($raw);
+        }
+
+        $messages = [];
+        $client = self::clientNotes($notes);
+        if ($client === '') {
+            $client = WebDesignMeta::clientNotes($notes);
+        }
+        foreach (preg_split('/\n{2,}/', $client) ?: [] as $text) {
+            $text = trim((string) $text);
+            if ($text !== '') {
+                $messages[] = ['from' => 'client', 'text' => $text];
+            }
+        }
+        $sales = self::salesNotes($notes);
+        if ($sales === '') {
+            $sales = WebDesignMeta::salesNotes($notes);
+        }
+        foreach (preg_split('/\n{2,}/', $sales) ?: [] as $text) {
+            $text = trim((string) $text);
+            if ($text !== '') {
+                $messages[] = ['from' => 'sales', 'text' => $text];
+            }
+        }
+
+        return $messages;
+    }
+
+    /**
+     * @param  array{name?: string, url?: string, kind?: string}|null  $file
+     */
+    public static function appendClientNote(?string $notes, string $message, ?array $file = null): string
+    {
+        return self::appendMessage($notes, 'client', $message, $file);
+    }
+
+    /**
+     * @param  array{name?: string, url?: string, kind?: string}|null  $file
+     */
+    public static function appendSalesNote(?string $notes, string $message, ?array $file = null): string
+    {
+        return self::appendMessage($notes, 'sales', $message, $file);
+    }
+
+    /**
+     * @param  array{name?: string, url?: string, kind?: string}|null  $file
+     */
+    public static function appendMessage(?string $notes, string $from, string $message, ?array $file = null): string
+    {
+        $fileMeta = self::normalizeFile($file);
+        $message = self::messageText(trim($message), $fileMeta);
+        $from = $from === 'sales' ? 'sales' : 'client';
+        if ($message === '') {
+            return (string) $notes;
+        }
+
+        $thread = self::conversation($notes);
+        $entry = [
+            'from' => $from,
+            'text' => $message,
+            'at' => date('c'),
+        ];
+        if ($fileMeta !== null) {
+            $entry['file'] = $fileMeta;
+        }
+        $thread[] = $entry;
+
+        $client = [];
+        $sales = [];
+        foreach ($thread as $row) {
+            if (($row['from'] ?? '') === 'sales') {
+                $sales[] = $row['text'];
+            } else {
+                $client[] = $row['text'];
+            }
+        }
+
+        $clientText = implode("\n\n", $client);
+        $salesText = implode("\n\n", $sales);
+        $updated = self::withConversation($notes, $clientText, $salesText);
+        $meta = self::parse($updated);
+        $meta['conversation'] = $thread;
+        $updated = self::replaceMeta($updated, $meta);
+
+        if (
+            WebDesignMeta::parse($updated) !== []
+            || WebDesignMeta::clientNotes($notes) !== ''
+            || WebDesignMeta::salesNotes($notes) !== ''
+        ) {
+            $updated = WebDesignMeta::withConversation($updated, $clientText, $salesText);
+        }
+
+        return $updated;
+    }
+
+    /**
+     * @param  array<int, mixed>  $raw
+     * @return list<array{from: string, text: string, at?: string, file?: array{name: string, url: string, kind: string}}>
+     */
+    private static function normalizeConversation(array $raw): array
+    {
+        $messages = [];
+        foreach ($raw as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $file = self::normalizeFile($row['file'] ?? null);
+            $text = self::messageText(trim((string) ($row['text'] ?? '')), $file);
+            if ($text === '') {
+                continue;
+            }
+            $from = ($row['from'] ?? '') === 'sales' ? 'sales' : 'client';
+            $message = ['from' => $from, 'text' => $text];
+            $at = trim((string) ($row['at'] ?? ''));
+            if ($at !== '') {
+                $message['at'] = $at;
+            }
+            if ($file !== null) {
+                $message['file'] = $file;
+            }
+            $messages[] = $message;
+        }
+
+        return $messages;
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $file
+     * @return array{name: string, url: string, path?: string, kind: string}|null
+     */
+    private static function normalizeFile(mixed $file): ?array
+    {
+        if (! is_array($file)) {
+            return null;
+        }
+        $name = trim((string) ($file['name'] ?? ''));
+        $path = DealConversationFile::filePath($file);
+        $url = trim((string) ($file['url'] ?? ''));
+        if ($url === '' && $path !== '') {
+            $url = StorageUrl::publicAsset($path) ?: '';
+        }
+        if ($name === '' && $url === '' && $path === '') {
+            return null;
+        }
+        $kind = trim((string) ($file['kind'] ?? 'file'));
+        if (! in_array($kind, ['file', 'proposal', 'signed'], true)) {
+            $kind = 'file';
+        }
+
+        $normalized = [
+            'name' => $name !== '' ? $name : 'Attachment',
+            'url' => $url,
+            'kind' => $kind,
+        ];
+        if ($path !== '') {
+            $normalized['path'] = $path;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param  array{name?: string, url?: string, kind?: string}|null  $file
+     */
+    private static function messageText(string $message, ?array $file): string
+    {
+        if ($message !== '') {
+            return $message;
+        }
+        if ($file === null) {
+            return '';
+        }
+        $name = trim((string) ($file['name'] ?? 'file'));
+        $kind = (string) ($file['kind'] ?? 'file');
+
+        return match ($kind) {
+            'proposal' => 'Uploaded a proposal quotation: '.$name,
+            'signed' => 'Uploaded the signed proposal: '.$name,
+            default => 'Sent an attachment: '.$name,
+        };
+    }
+
+    public const REGISTRATION_YEARS = 9;
+
+    public const SSL_WILDCARD_YEARS = 9;
+
+    public const DOMAIN_SUBSCRIPTION_YEARS = 10;
+
+    /**
+     * Registration and wildcard SSL expirations are owned here.
+     * Domain subscriptions run 10 years from the sales-entered start date.
+     *
+     * @param  iterable<int, mixed>  $itemNames
+     */
+    public static function applyManagedDates(?string $notes, iterable $itemNames = []): string
+    {
+        $text = (string) $notes;
+        $meta = self::parse($text);
+        if ($meta === []) {
+            return $text;
+        }
+
+        $names = [];
+        foreach ($itemNames as $name) {
+            $names[] = (string) $name;
+        }
+        foreach (['dealName', 'productName', 'productCategory'] as $key) {
+            $names[] = (string) ($meta[$key] ?? '');
+        }
+        if (isset($meta['dealNames']) && is_array($meta['dealNames'])) {
+            foreach ($meta['dealNames'] as $name) {
+                $names[] = (string) $name;
+            }
+        }
+
+        unset($meta['statusTriggerDate']);
+
+        $registrationStart = self::dateOrNull($meta['domainRegistrationStartDate'] ?? null)
+            ?? self::dateOrNull($meta['expirationStartDate'] ?? null);
+        if ($registrationStart) {
+            $meta['domainRegistrationExpirationDate'] = $registrationStart
+                ->copy()
+                ->addYears(self::REGISTRATION_YEARS)
+                ->format('Y-m-d');
+        }
+
+        if (self::namesIncludeWildcardSsl($names)) {
+            $sslStart = self::dateOrNull($meta['expirationStartDate'] ?? null)
+                ?? self::dateOrNull($meta['domainRegistrationStartDate'] ?? null)
+                ?? self::dateOrNull($meta['subscriptionStartDate'] ?? null);
+            if ($sslStart) {
+                $meta['sslWildcardExpirationDate'] = $sslStart
+                    ->copy()
+                    ->addYears(self::SSL_WILDCARD_YEARS)
+                    ->format('Y-m-d');
+            }
+        }
+
+        $domainStart = self::dateOrNull($meta['domainSubscriptionStartDate'] ?? null);
+        if ($domainStart) {
+            $meta['domainSubscriptionEndDate'] = $domainStart
+                ->copy()
+                ->addYears(self::DOMAIN_SUBSCRIPTION_YEARS)
+                ->format('Y-m-d');
+        }
+
+        $subscriptionStart = self::dateOrNull($meta['subscriptionStartDate'] ?? null) ?? $domainStart;
+        if ($subscriptionStart && self::usesDomainSubscription($meta)) {
+            $meta['subscriptionEndDate'] = $subscriptionStart
+                ->copy()
+                ->addYears(self::DOMAIN_SUBSCRIPTION_YEARS)
+                ->format('Y-m-d');
+        } elseif ($subscriptionStart) {
+            $months = self::paymentTermMonths((string) ($meta['paymentTerms'] ?? ''));
+            if ($months) {
+                $meta['subscriptionEndDate'] = $subscriptionStart->copy()->addMonths($months)->format('Y-m-d');
+            }
+        }
+
+        return self::replaceMeta($text, $meta);
+    }
+
+    /**
+     * Finance tracks the registration or wildcard expiration, not the client subscription.
+     */
+    public static function financeExpirationDate(?string $notes): ?Carbon
+    {
+        $meta = self::parse($notes);
+        $dates = array_values(array_filter([
+            self::dateOrNull($meta['domainRegistrationExpirationDate'] ?? null),
+            self::dateOrNull($meta['sslWildcardExpirationDate'] ?? null),
+        ]));
+
+        if ($dates === []) {
+            $start = self::dateOrNull($meta['expirationStartDate'] ?? null)
+                ?? self::dateOrNull($meta['domainRegistrationStartDate'] ?? null);
+
+            return $start?->copy()->addYears(self::REGISTRATION_YEARS);
+        }
+
+        usort($dates, fn (Carbon $left, Carbon $right) => $left->getTimestamp() <=> $right->getTimestamp());
+
+        return $dates[0];
+    }
+
+    /**
+     * Clients track the subscription period entered by sales.
+     */
+    public static function clientSubscriptionEnd(?string $notes): ?Carbon
+    {
+        $meta = self::parse($notes);
+        $domainEnd = self::dateOrNull($meta['domainSubscriptionEndDate'] ?? null);
+        $dealEnd = self::dateOrNull($meta['subscriptionEndDate'] ?? null);
+        if (self::usesDomainSubscription($meta) || self::domainName($notes) !== '') {
+            return $domainEnd ?? $dealEnd;
+        }
+
+        return $dealEnd ?? $domainEnd;
+    }
+
+    /**
+     * @param  array<int, string>  $names
+     */
+    private static function namesIncludeWildcardSsl(array $names): bool
+    {
+        foreach ($names as $name) {
+            if (preg_match('/wildcard\s*ssl/i', $name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private static function usesDomainSubscription(array $meta): bool
+    {
+        $category = strtolower(trim((string) ($meta['productCategory'] ?? '')));
+        if ($category === 'domain registration') {
+            return true;
+        }
+
+        return self::dateOrNull($meta['domainSubscriptionStartDate'] ?? null) !== null;
+    }
+
+    private static function paymentTermMonths(string $terms): ?int
+    {
+        $text = strtolower($terms);
+        if ($text === '') {
+            return null;
+        }
+        if (str_contains($text, 'quinquennial')) {
+            return 60;
+        }
+        if (str_contains($text, 'quadrennial')) {
+            return 48;
+        }
+        if (str_contains($text, 'triennial')) {
+            return 36;
+        }
+        if (str_contains($text, 'biennial')) {
+            return 24;
+        }
+        if (str_contains($text, 'semi-annual') || str_contains($text, 'semiannual')) {
+            return 6;
+        }
+        if (str_contains($text, 'annual')) {
+            return 12;
+        }
+        if (str_contains($text, 'quarter')) {
+            return 3;
+        }
+        if (str_contains($text, 'month')) {
+            return 1;
+        }
+
+        return null;
+    }
+
+    private static function dateOrNull(mixed $value): ?Carbon
+    {
+        $text = trim((string) $value);
+        if ($text === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($text)->startOfDay();
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $meta
+     */
+    private static function replaceMeta(string $notes, array $meta): string
+    {
+        $encoded = json_encode($meta, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        $metaLine = self::PREFIX.($encoded === false ? '{}' : $encoded);
+        $marker = strpos($notes, self::PREFIX);
+        if ($marker === false) {
+            return trim($metaLine."\n".$notes);
+        }
+
+        $before = trim(substr($notes, 0, $marker));
+        $afterMarker = substr($notes, $marker + strlen(self::PREFIX));
+        $newline = strpos($afterMarker, "\n");
+        $after = $newline === false ? '' : trim(substr($afterMarker, $newline + 1));
+
+        return implode("\n", array_values(array_filter(
+            [$before, $metaLine, $after],
+            fn ($part) => $part !== ''
+        )));
     }
 }

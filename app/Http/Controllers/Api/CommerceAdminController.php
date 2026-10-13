@@ -11,6 +11,7 @@ use App\Models\CustomerService;
 use App\Models\CustomerSupportTicket;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Support\DealMeta;
 use App\Support\ServiceCatalogLabelResolver;
 use App\Support\TransactionLabelResolver;
 use App\Support\StorageUrl;
@@ -265,10 +266,18 @@ class CommerceAdminController extends Controller
 
         $expiringServices = CustomerService::query()
             ->with('customer:id,fname,lname,email')
-            ->whereNotNull('renew_at')
-            ->where('renew_at', '<=', now()->addDays(30))
             ->where('status', '!=', 'Expired')
-            ->orderBy('renew_at')
+            ->where(function ($query) {
+                $query->where(function ($expiration) {
+                    $expiration->whereNotNull('expires_at')
+                        ->where('expires_at', '<=', now()->addDays(30));
+                })->orWhere(function ($subscription) {
+                    $subscription->whereNull('expires_at')
+                        ->whereNotNull('renew_at')
+                        ->where('renew_at', '<=', now()->addDays(30));
+                });
+            })
+            ->orderByRaw('COALESCE(expires_at, renew_at) asc')
             ->limit(40)
             ->get()
             ->map(fn (CustomerService $row) => $this->mapExpiringService($row));
@@ -701,18 +710,8 @@ class CommerceAdminController extends Controller
                 ->values();
         }
 
-        // Staff inbox copies for this signed-in user (quotations, proofs, tickets, profile changes).
-        $inboxRows = CustomerNotification::query()
-            ->where('customer_id', $staff->id)
-            ->where(function ($query) {
-                $query->where('reference_key', 'like', 'admin:%')
-                    ->orWhereIn('type', [
-                        'web_design_quotation',
-                        'payment_proof',
-                        'profile_change',
-                        'support_ticket',
-                    ]);
-            })
+        // Staff inbox copies for this signed-in user (quotations, proofs, tickets, profile changes, deal replies).
+        $inboxRows = $this->staffInboxNotificationQuery($staff)
             ->latest()
             ->limit($perPage)
             ->get();
@@ -733,6 +732,8 @@ class CommerceAdminController extends Controller
             } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed|priced):(\d+)$/', $key, $m)) {
+                $orderIds[] = (int) $m[1];
+            } elseif (preg_match('/^deal-(?:customer-)?reply:(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:provisioning-(?:action|countdown):(\d+)$/', $key, $m)) {
                 $actionIds[] = (int) $m[1];
@@ -1068,7 +1069,8 @@ class CommerceAdminController extends Controller
             'notes' => $proof->notes,
             'submittedAt' => optional($proof->created_at)->format('Y-m-d H:i'),
             'issuedDate' => TransactionLabelResolver::issuedDateFrom($transactedAt),
-            'expiredDate' => TransactionLabelResolver::dueDateFrom($transactedAt),
+            'expiredDate' => DealMeta::financeExpirationDate($transaction?->notes)?->format('Y-m-d')
+                ?: TransactionLabelResolver::dueDateFrom($transactedAt),
             'amount' => $transaction ? WebDesignQuotation::displayAmount($transaction) : 0.0,
             'serviceName' => TransactionLabelResolver::productCategoryFromTransaction($transaction?->notes, $items),
             'plan' => TransactionLabelResolver::planLabel($items, $firstItem?->name),
@@ -1133,6 +1135,7 @@ class CommerceAdminController extends Controller
             'email' => $customer?->email,
             'renewLabel' => $service->renew_label,
             'renewAt' => optional($service->renew_at)->format('Y-m-d'),
+            'expiresAt' => optional($service->expires_at)->format('Y-m-d'),
             'transactionNo' => $service->salesTransaction?->transaction_no,
         ];
     }
@@ -1151,14 +1154,15 @@ class CommerceAdminController extends Controller
 
     private function mapExpiringService(CustomerService $row): array
     {
-        $daysLeft = $row->renew_at ? now()->diffInDays(Carbon::parse($row->renew_at), false) : null;
+        $expiry = $row->expires_at ?? $row->renew_at;
+        $daysLeft = $expiry ? now()->diffInDays(Carbon::parse($expiry), false) : null;
 
         return [
             'id' => (string) $row->id,
             'customerId' => $row->customer_id,
             'service' => $row->title,
             'company' => $row->customer?->full_name ?? 'Customer',
-            'expiryDate' => optional($row->renew_at)->format('Y-m-d'),
+            'expiryDate' => optional($expiry)->format('Y-m-d'),
             'daysLeft' => $daysLeft !== null ? "{$daysLeft} Days" : '—',
             'status' => 'Expiring',
         ];
@@ -1257,6 +1261,9 @@ class CommerceAdminController extends Controller
         if ($kind === 'web_design_quotation') {
             return 'Open Pending Quotation';
         }
+        if ($kind === 'deal_reply') {
+            return 'Open Deal';
+        }
 
         return 'Open Deals';
     }
@@ -1301,7 +1308,7 @@ class CommerceAdminController extends Controller
             'status' => $status,
             'actionLabel' => 'Open Pending Quotation',
             'uploadProposal' => $needsProposal,
-            'setPrice' => ! $priced,
+            'setPrice' => WebDesignQuotation::isPendingQuotation($order),
             'proceedPayment' => $proposalSigned && $priced,
         ];
     }
@@ -1317,7 +1324,6 @@ class CommerceAdminController extends Controller
         mixed $submittedAt = null,
     ): array {
         $itemNames = WebDesignMeta::packageItemLine($order->items, $order->notes);
-        $inboxFields = WebDesignMeta::inboxFields($order->notes);
         $details = $this->inboxDetails([
             'Client' => $fromName,
             'Email' => $fromEmail,
@@ -1339,8 +1345,6 @@ class CommerceAdminController extends Controller
         }
 
         return array_merge($details, $this->inboxDetails([
-            'Notes' => $inboxFields['Notes'],
-            'Sales reply' => $inboxFields['Sales reply'] ?? '',
             'Amount' => $this->formatInboxMoney(WebDesignQuotation::displayAmount($order)),
             'Status' => $actions['status'],
             'Submitted' => $this->formatAppDateTime($submittedAt ?? $order->created_at ?? $order->transacted_at),
@@ -1365,6 +1369,8 @@ class CommerceAdminController extends Controller
             str_starts_with($referenceKey, 'admin:webdesign-priced:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:provisioning-action:')
                 || str_starts_with($referenceKey, 'admin:provisioning-countdown:') => 'provisioning_action',
+            str_starts_with($referenceKey, 'deal-reply:') => 'deal_reply',
+            str_starts_with($referenceKey, 'deal-customer-reply:') => 'deal_reply',
             default => (string) ($row->type ?: 'general'),
         };
 
@@ -1374,6 +1380,7 @@ class CommerceAdminController extends Controller
             'support_ticket' => 'Open',
             'web_design_quotation' => 'Pending Quotation',
             'provisioning_action' => 'Assigned',
+            'deal_reply' => 'Deal Reply',
             default => 'Unread',
         };
 
@@ -1386,6 +1393,7 @@ class CommerceAdminController extends Controller
         $transactionNo = null;
         $referenceId = null;
         $quotationActions = null;
+        $orderForReply = null;
 
         if (preg_match('/^admin:payment-proof:(\d+)$/', $referenceKey, $match)) {
             $proof = $proofs->get((int) $match[1]);
@@ -1520,6 +1528,7 @@ class CommerceAdminController extends Controller
                     $actions,
                     $row->created_at,
                 );
+                $orderForReply = $order;
             }
         } elseif (preg_match('/^admin:provisioning-(?:action|countdown):(\d+)$/', $referenceKey, $match)) {
             $action = $provisioningActions?->get((int) $match[1]);
@@ -1555,6 +1564,41 @@ class CommerceAdminController extends Controller
                     'Next step' => $action->status === 'pending' ? 'Mark this action done' : ucfirst((string) $action->status),
                     'Status' => ucfirst((string) $action->status),
                 ]);
+            }
+        } elseif (preg_match('/^deal-(?:customer-)?reply:(\d+)$/', $referenceKey, $match)) {
+            $order = $orders->get((int) $match[1]);
+            $status = 'Deal Reply';
+            if ($order) {
+                $customer = $order->customer;
+                $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
+                $fromEmail = $customer?->email ?: $order->customer_email;
+                $transactionNo = $order->transaction_no;
+                $referenceId = (int) $order->id;
+                $intro = (string) $row->body;
+                $orderForReply = $order;
+                if (WebDesignQuotation::isWebDesign($order)) {
+                    $status = 'Quotation Reply';
+                    $actions = $this->webDesignQuotationActions($order);
+                    $quotationActions = [
+                        'uploadProposal' => $actions['uploadProposal'],
+                        'setPrice' => $actions['setPrice'],
+                        'proceedPayment' => $actions['proceedPayment'],
+                    ];
+                    $details = $this->webDesignQuotationDetails(
+                        $order,
+                        $fromName,
+                        $fromEmail,
+                        $actions,
+                        $row->created_at,
+                    );
+                } else {
+                    $details = $this->inboxDetails([
+                        'Client' => $fromName,
+                        'Email' => $fromEmail,
+                        'Order No' => $order->transaction_no,
+                        'Received' => $this->formatAppDateTime($row->created_at),
+                    ]);
+                }
             }
         } elseif ($kind === 'billing') {
             $intro = $row->body ?: 'A client deleted one or more invoices from their billing list.';
@@ -1604,6 +1648,18 @@ class CommerceAdminController extends Controller
             'details' => $details,
             'actionLabel' => $this->inboxActionLabel($kind, $actionUrl),
             'quotationActions' => $quotationActions,
+            'canReply' => $referenceId !== null && in_array($kind, ['deal_reply', 'web_design_quotation'], true),
+            'recordId' => $referenceId,
+            'clientNotes' => $orderForReply
+                ? (DealMeta::clientNotes($orderForReply->notes) ?: WebDesignMeta::clientNotes($orderForReply->notes))
+                : null,
+            'salesNotes' => $orderForReply
+                ? (DealMeta::salesNotes($orderForReply->notes) ?: WebDesignMeta::salesNotes($orderForReply->notes))
+                : null,
+            'conversation' => $orderForReply ? DealMeta::conversation($orderForReply->notes) : [],
+            'quotedPrice' => $orderForReply
+                ? (DealMeta::quotedPrice($orderForReply->notes) ?: round((float) $orderForReply->grand_total, 2))
+                : 0,
         ];
     }
 
@@ -1656,10 +1712,16 @@ class CommerceAdminController extends Controller
             'actionLabel' => $actions['actionLabel'],
             'referenceId' => (int) $row->id,
             'quotationActions' => [
-                'uploadProposal' => $actions['uploadProposal'],
+                'uploadProposal' => false,
                 'setPrice' => $actions['setPrice'],
                 'proceedPayment' => $actions['proceedPayment'],
             ],
+            'canReply' => true,
+            'recordId' => (int) $row->id,
+            'quotedPrice' => DealMeta::quotedPrice($row->notes) ?: round((float) $row->grand_total, 2),
+            'clientNotes' => DealMeta::clientNotes($row->notes) ?: WebDesignMeta::clientNotes($row->notes),
+            'salesNotes' => DealMeta::salesNotes($row->notes) ?: WebDesignMeta::salesNotes($row->notes),
+            'conversation' => DealMeta::conversation($row->notes),
         ];
     }
 
@@ -1682,11 +1744,14 @@ class CommerceAdminController extends Controller
             ->where('customer_id', $staff->id)
             ->where(function ($query) {
                 $query->where('reference_key', 'like', 'admin:%')
+                    ->orWhere('reference_key', 'like', 'deal-%')
+                    ->orWhere('reference_key', 'like', 'webdesign-quotation-reply:%')
                     ->orWhereIn('type', [
                         'web_design_quotation',
                         'payment_proof',
                         'profile_change',
                         'support_ticket',
+                        'deal_reply',
                     ]);
             })
             ->when(! $canSeeQuotations, function ($query) {

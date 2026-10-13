@@ -93,6 +93,8 @@ class CustomerPortalNotificationSync
             })
             ->whereNotIn('reference_key', $activeKeys ?: ['__none__'])
             ->delete();
+
+        $this->stripTechnicalFromCustomerNotices($customerId);
     }
 
     public function buildOverviewAlerts(Collection $services, Collection $transactions): array
@@ -297,6 +299,49 @@ class CustomerPortalNotificationSync
                 });
             })
             ->values();
+    }
+
+    private function stripTechnicalFromCustomerNotices(int $customerId): void
+    {
+        $rows = CustomerNotification::query()
+            ->where('customer_id', $customerId)
+            ->where(function ($query) {
+                $query->where('title', 'like', '%Technical%')
+                    ->orWhere('body', 'like', '%Technical%');
+            })
+            ->get();
+
+        foreach ($rows as $row) {
+            $title = self::customerNoticeTitle((string) $row->title);
+            $body = self::customerNoticeBody((string) $row->body);
+            if ($title === $row->title && $body === $row->body) {
+                continue;
+            }
+            $row->fill([
+                'title' => $title,
+                'body' => $body,
+            ])->save();
+        }
+    }
+
+    public static function customerNoticeTitle(string $title): string
+    {
+        $text = trim(preg_replace('/\btechnical\s+/i', '', $title) ?? $title);
+        $text = trim(preg_replace('/\s+/', ' ', $text) ?? $text);
+        if (preg_match('/provisioning completed/i', $text)) {
+            return 'Provisioning Completed';
+        }
+
+        return $text !== '' ? $text : 'Provisioning Completed';
+    }
+
+    public static function customerNoticeBody(string $body): string
+    {
+        $text = preg_replace('/\bTechnical Support finished provisioning\b/i', 'Provisioning finished for', $body) ?? $body;
+        $text = preg_replace('/\bTechnical support finished provisioning\b/i', 'Provisioning finished for', $text) ?? $text;
+        $text = preg_replace('/\btechnical\s+/i', '', $text) ?? $text;
+
+        return trim($text);
     }
 
     private function upsert(int $customerId, string $referenceKey, array $payload): void

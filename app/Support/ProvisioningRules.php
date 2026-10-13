@@ -36,8 +36,24 @@ class ProvisioningRules
             || str_contains($label, 'website template');
     }
 
+    public static function isBareMetalName(string $name, ?string $itemType = null): bool
+    {
+        $haystack = strtolower(trim($name . ' ' . (string) $itemType));
+        if (preg_match('/add[-\s]?ons?/', $haystack)) {
+            return false;
+        }
+
+        return str_contains($haystack, 'bare metal')
+            || str_contains($haystack, 'baremetal')
+            || str_contains($haystack, 'bare-metal');
+    }
+
     public static function standardHours(string $name, ?string $itemType = null): int
     {
+        if (self::isBareMetalName($name, $itemType)) {
+            return 0;
+        }
+
         $haystack = strtolower(trim($name . ' ' . (string) $itemType));
 
         if (str_contains($haystack, 'domain')) {
@@ -61,10 +77,28 @@ class ProvisioningRules
         }
 
         $hours = 0;
+        $hasBareMetal = false;
+        $hasTimedWork = false;
         foreach ($items as $item) {
             $name = is_array($item) ? (string) ($item['name'] ?? '') : (string) ($item->name ?? '');
             $type = is_array($item) ? ($item['item_type'] ?? null) : ($item->item_type ?? null);
-            $hours = max($hours, self::standardHours($name, is_string($type) ? $type : null));
+            $itemType = is_string($type) ? $type : null;
+            if (self::isBareMetalName($name, $itemType)) {
+                $hasBareMetal = true;
+                continue;
+            }
+            $itemHours = self::standardHours($name, $itemType);
+            if ($itemHours > 0) {
+                $hasTimedWork = true;
+                $hours = max($hours, $itemHours);
+            }
+        }
+
+        if ($hasBareMetal && ! $hasTimedWork) {
+            return [
+                'timeline' => 'standard',
+                'durationHours' => null,
+            ];
         }
 
         return [

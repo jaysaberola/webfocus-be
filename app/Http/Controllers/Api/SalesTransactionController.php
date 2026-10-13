@@ -13,6 +13,8 @@ use App\Services\ClientOwnerRotator;
 use App\Services\CommerceStaffNotifier;
 use App\Services\CustomerPortalProvisioner;
 use App\Services\PaynamicsService;
+use App\Support\DealConversationFile;
+use App\Support\DealMeta;
 use App\Support\PendingCheckoutGuard;
 use App\Support\StorageUrl;
 use App\Support\TransactionLabelResolver;
@@ -87,6 +89,10 @@ class SalesTransactionController extends Controller
         $validated['grand_total'] = $this->calculateGrandTotal($validated);
         $validated['transacted_at'] = $this->normalizeTransactedAt(
             $validated['transacted_at'] ?? null
+        );
+        $validated['notes'] = DealMeta::applyManagedDates(
+            $validated['notes'] ?? null,
+            array_map(fn ($item) => (string) ($item['name'] ?? ''), $items)
         );
         $explicitOwnerId = isset($validated['client_owner_id'])
             ? (int) $validated['client_owner_id']
@@ -406,9 +412,17 @@ class SalesTransactionController extends Controller
         ]);
 
         $salesTransaction->update([
-            'notes' => WebDesignQuotation::appendMarker(
-                $salesTransaction->notes,
-                WebDesignQuotation::PROPOSAL_SUBMITTED
+            'notes' => DealMeta::appendSalesNote(
+                WebDesignQuotation::appendMarker(
+                    $salesTransaction->notes,
+                    WebDesignQuotation::PROPOSAL_SUBMITTED
+                ),
+                '',
+                [
+                    'name' => $file->getClientOriginalName(),
+                    'url' => StorageUrl::publicAsset($path) ?: '',
+                    'kind' => 'proposal',
+                ]
             ),
         ]);
 
@@ -549,7 +563,8 @@ class SalesTransactionController extends Controller
         $wasPendingQuote = WebDesignQuotation::isPendingQuotation($salesTransaction)
             && (float) $salesTransaction->grand_total <= 0;
         $previousGrandTotal = round((float) $salesTransaction->grand_total, 2);
-        $previousSalesNotes = WebDesignMeta::salesNotes($salesTransaction->notes);
+        $previousSalesNotes = DealMeta::salesNotes($salesTransaction->notes)
+            ?: WebDesignMeta::salesNotes($salesTransaction->notes);
 
         $validated = $this->validatedPayload($request, $salesTransaction->id);
         $items = $validated['items'] ?? null;
@@ -563,6 +578,43 @@ class SalesTransactionController extends Controller
             $validated['transacted_at'] = $this->normalizeTransactedAt(
                 $validated['transacted_at']
             );
+        }
+        $itemNames = is_array($items)
+            ? array_map(fn ($item) => (string) ($item['name'] ?? ''), $items)
+            : $salesTransaction->items()->pluck('name')->all();
+        $validated['notes'] = DealMeta::applyManagedDates($validated['notes'] ?? null, $itemNames);
+        $conversationClient = DealMeta::clientNotes($validated['notes'])
+            ?: WebDesignMeta::clientNotes($validated['notes']);
+        $conversationSales = DealMeta::salesNotes($validated['notes'])
+            ?: WebDesignMeta::salesNotes($validated['notes']);
+        if ($conversationClient !== '' || $conversationSales !== '') {
+            $validated['notes'] = DealMeta::withConversation(
+                $validated['notes'],
+                $conversationClient !== '' ? $conversationClient : null,
+                $conversationSales !== '' ? $conversationSales : null
+            );
+            if (WebDesignQuotation::isWebDesign($salesTransaction) || WebDesignMeta::parse($validated['notes']) !== []) {
+                $validated['notes'] = WebDesignMeta::withConversation(
+                    $validated['notes'],
+                    $conversationClient !== '' ? $conversationClient : null,
+                    $conversationSales !== '' ? $conversationSales : null
+                );
+            }
+        }
+
+        $nextQuoted = round((float) ($validated['grand_total'] ?? 0), 2);
+        if (
+            WebDesignQuotation::isWebDesign($salesTransaction)
+            && $nextQuoted > 0
+            && abs($nextQuoted - $previousGrandTotal) >= 0.01
+        ) {
+            $validated['notes'] = DealMeta::pinQuotedPrice($validated['notes'] ?? null, $nextQuoted, [
+                'orderNo' => (string) $salesTransaction->transaction_no,
+                'items' => is_array($items) ? $items : $salesTransaction->items,
+                'subtotal' => (float) ($validated['subtotal'] ?? 0),
+                'discount' => (float) ($validated['discount_total'] ?? 0),
+                'tax' => (float) ($validated['tax_total'] ?? 0),
+            ]);
         }
 
         $explicitOwnerId = array_key_exists('client_owner_id', $validated)
@@ -600,10 +652,13 @@ class SalesTransactionController extends Controller
 
         $fresh = $salesTransaction->fresh(['items']);
         if (
-            $wasPendingQuote
-            && $fresh
+            $fresh
             && $fresh->customer_id
-            && WebDesignQuotation::displayAmount($fresh) > 0
+            && (
+                ($wasPendingQuote && WebDesignQuotation::displayAmount($fresh) > 0)
+                || DealMeta::quotedPrice($fresh->notes) > 0
+            )
+            && abs((float) $fresh->grand_total - $previousGrandTotal) >= 0.01
         ) {
             $this->notifyCustomerQuotationPriced($fresh);
         }
@@ -618,17 +673,116 @@ class SalesTransactionController extends Controller
             $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? '')));
             $this->notifyAdminQuotationPriced($fresh, $actorName !== '' ? $actorName : 'Sales');
         }
-        if (
-            $fresh
-            && $fresh->customer_id
-            && WebDesignQuotation::isWebDesign($fresh)
-        ) {
-            $this->notifyCustomerQuotationReply($fresh, $previousSalesNotes);
+        if ($fresh && $fresh->customer_id) {
+            $this->notifyDealConversation($fresh, $previousSalesNotes, $request->user());
         }
 
         return response()->json([
             'message' => 'Sales transaction updated successfully',
             'data' => $salesTransaction->fresh()->load($this->transactionRelations()),
+        ]);
+    }
+
+    public function replyConversation(Request $request, SalesTransaction $salesTransaction)
+    {
+        $user = $request->user();
+        abort_unless($user, 401);
+        abort_if($user->hasRole('customer'), 403, 'Staff only.');
+        if (WebDesignQuotation::isWebDesign($salesTransaction)) {
+            $this->assertSalesCanManageWebDesign($request, $salesTransaction);
+        }
+
+        $validated = $request->validate([
+            'message' => ['nullable', 'string', 'max:2000'],
+            'file' => ['nullable', 'file', 'mimes:pdf,doc,docx,png,jpg,jpeg', 'max:10240'],
+        ]);
+
+        $message = trim((string) ($validated['message'] ?? ''));
+        abort_if($message === '' && ! $request->hasFile('file'), 422, 'Enter a message or attach a file.');
+
+        $fileMeta = null;
+        if ($request->hasFile('file')) {
+            $fileMeta = DealConversationFile::store(
+                $salesTransaction,
+                $request->file('file'),
+                'sales',
+                $user->id
+            );
+        }
+
+        $previousSalesNotes = DealMeta::salesNotes($salesTransaction->notes)
+            ?: WebDesignMeta::salesNotes($salesTransaction->notes);
+
+        $salesTransaction->update([
+            'notes' => DealMeta::appendSalesNote($salesTransaction->notes, $message, $fileMeta),
+        ]);
+
+        $fresh = $salesTransaction->fresh(['items']);
+        if ($fresh && $fresh->customer_id) {
+            $this->notifyDealConversation($fresh, $previousSalesNotes, $user);
+            if (($fileMeta['kind'] ?? '') === 'proposal') {
+                CustomerNotification::query()->updateOrCreate(
+                    [
+                        'customer_id' => $fresh->customer_id,
+                        'reference_key' => 'webdesign-proposal:'.$salesTransaction->id,
+                    ],
+                    [
+                        'title' => 'Proposal Quotation Ready',
+                        'body' => 'A proposal quotation for '
+                            .$fresh->transaction_no
+                            .' is ready to review. Download it, sign it, and re-upload the signed copy.',
+                        'type' => 'billing',
+                        'action_url' => '/public/dashboard?tab=billing',
+                        'read_at' => null,
+                    ]
+                );
+            }
+        }
+
+        $notes = $fresh?->notes;
+
+        return response()->json([
+            'message' => 'Reply sent.',
+            'data' => [
+                'recordId' => $salesTransaction->id,
+                'notes' => $notes,
+                'clientNotes' => DealMeta::clientNotes($notes) ?: WebDesignMeta::clientNotes($notes),
+                'salesNotes' => DealMeta::salesNotes($notes) ?: WebDesignMeta::salesNotes($notes),
+                'conversation' => DealMeta::conversation($notes),
+            ],
+        ]);
+    }
+
+    public function downloadConversationFile(Request $request, SalesTransaction $salesTransaction)
+    {
+        $user = $request->user();
+        abort_unless($user, 401);
+        abort_if($user->hasRole('customer'), 403, 'Staff only.');
+
+        return DealConversationFile::download(
+            $salesTransaction,
+            (string) $request->query('path', $request->query('name', '')),
+            $request->boolean('download')
+        );
+    }
+
+    public function conversation(Request $request, SalesTransaction $salesTransaction)
+    {
+        $user = $request->user();
+        abort_unless($user, 401);
+        abort_if($user->hasRole('customer'), 403, 'Staff only.');
+
+        $notes = $salesTransaction->notes;
+
+        return response()->json([
+            'data' => [
+                'recordId' => $salesTransaction->id,
+                'notes' => $notes,
+                'clientNotes' => DealMeta::clientNotes($notes) ?: WebDesignMeta::clientNotes($notes),
+                'salesNotes' => DealMeta::salesNotes($notes) ?: WebDesignMeta::salesNotes($notes),
+                'conversation' => DealMeta::conversation($notes),
+                'quotedPrice' => DealMeta::quotedPrice($notes),
+            ],
         ]);
     }
 
@@ -997,13 +1151,9 @@ class SalesTransactionController extends Controller
         }
 
         $transaction->loadMissing(['items']);
-        $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes);
-        $amount = WebDesignQuotation::displayAmount($transaction);
-        $lines = WebDesignMeta::amountDetailRows($transaction->items, $transaction->notes);
-        $lineText = collect($lines)
-            ->map(fn (array $row) => $row['value'] ?? '')
-            ->filter()
-            ->implode('; ');
+        $amount = DealMeta::quotedPrice($transaction->notes)
+            ?: round((float) $transaction->grand_total, 2)
+            ?: WebDesignQuotation::displayAmount($transaction);
 
         CustomerNotification::query()->updateOrCreate(
             [
@@ -1011,14 +1161,14 @@ class SalesTransactionController extends Controller
                 'reference_key' => 'webdesign-quotation-priced:'.$transaction->id,
             ],
             [
-                'title' => 'Web Design Quotation Amount Set',
-                'body' => 'Sales set the quotation amounts for '
-                    . $transaction->transaction_no
-                    . ($itemNames ? " ({$itemNames})" : '')
-                    . '. Grand total is ₱'
-                    . number_format($amount, 2)
-                    . ($lineText !== '' ? '. '.$lineText : '')
-                    . '. Status is still Pending Quotation until the proposal is signed and payment is requested.',
+                'title' => 'Quoted price is ready',
+                'body' => DealMeta::quoteSummary($amount, $transaction->notes, [
+                    'orderNo' => (string) $transaction->transaction_no,
+                    'items' => $transaction->items,
+                    'subtotal' => (float) $transaction->subtotal,
+                    'discount' => (float) $transaction->discount_total,
+                    'tax' => (float) $transaction->tax_total,
+                ]),
                 'type' => 'order',
                 'action_url' => '/public/dashboard?tab=orders',
                 'read_at' => null,
@@ -1061,35 +1211,66 @@ class SalesTransactionController extends Controller
 
     private function notifyCustomerQuotationReply(SalesTransaction $transaction, string $previousSalesNotes): void
     {
+        $this->notifyDealConversation($transaction, $previousSalesNotes);
+    }
+
+    private function notifyDealConversation(
+        SalesTransaction $transaction,
+        string $previousSalesNotes,
+        ?User $actor = null,
+    ): void {
         if (! $transaction->customer_id) {
             return;
         }
 
         $transaction->loadMissing(['items']);
-        $salesNotes = WebDesignMeta::salesNotes($transaction->notes);
+        $salesNotes = DealMeta::salesNotes($transaction->notes)
+            ?: WebDesignMeta::salesNotes($transaction->notes);
         if ($salesNotes === '' || $salesNotes === $previousSalesNotes) {
             return;
         }
 
-        $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes);
-        $clientNotes = WebDesignMeta::clientNotes($transaction->notes);
+        $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes)
+            ?: TransactionLabelResolver::planLabel($transaction->items, $transaction->transaction_no);
+        $clientNotes = DealMeta::clientNotes($transaction->notes)
+            ?: WebDesignMeta::clientNotes($transaction->notes);
+        $isWebDesign = WebDesignQuotation::isWebDesign($transaction);
+        $title = $isWebDesign ? 'Sales replied to your quotation' : 'Sales replied to your deal';
+        $body = 'Sales replied to '
+            .$transaction->transaction_no
+            .($itemNames ? " ({$itemNames})" : '')
+            .($clientNotes !== '' ? '. Your notes: '.$clientNotes : '')
+            .'. Reply: '.$salesNotes
+            .($isWebDesign ? ' You can keep talking about the price until the quotation is approved.' : '');
 
         CustomerNotification::query()->updateOrCreate(
             [
                 'customer_id' => $transaction->customer_id,
-                'reference_key' => 'webdesign-quotation-reply:'.$transaction->id,
+                'reference_key' => ($isWebDesign ? 'webdesign-quotation-reply:' : 'deal-reply:').$transaction->id,
             ],
             [
-                'title' => 'Sales replied to your quotation',
-                'body' => 'Sales replied to quotation '
-                    . $transaction->transaction_no
-                    . ($itemNames ? " ({$itemNames})" : '')
-                    . ($clientNotes !== '' ? '. Your notes: '.$clientNotes : '')
-                    . '. Reply: '.$salesNotes,
+                'title' => $title,
+                'body' => $body,
                 'type' => 'order',
                 'action_url' => '/public/dashboard?tab=orders',
                 'read_at' => null,
             ]
+        );
+
+        $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? '')));
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            (int) $transaction->customer_id,
+            ['sales_admin', 'admin', 'sales_staff'],
+            'deal-reply:'.$transaction->id,
+            $isWebDesign ? 'Sales replied to a quotation' : 'Sales replied to a deal',
+            ($actorName !== '' ? $actorName : 'Sales')
+                .' replied on '
+                .$transaction->transaction_no
+                .($itemNames ? " ({$itemNames})" : '')
+                .'. Reply: '.$salesNotes,
+            'deal_reply',
+            '/public/commerce-admin?tab=orders',
+            true,
         );
     }
 }

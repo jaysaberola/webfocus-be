@@ -52,6 +52,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/services', [CustomerPortalController::class, 'services']);
         Route::get('/orders', [CustomerPortalController::class, 'orders']);
         Route::post('/orders/{salesTransaction}/cancel', [CustomerPortalController::class, 'cancelOrder']);
+        Route::post('/orders/{salesTransaction}/notes', [CustomerPortalController::class, 'replyOrder']);
+        Route::get('/orders/{salesTransaction}/conversation', [CustomerPortalController::class, 'conversation']);
+        Route::get('/orders/{salesTransaction}/files', [CustomerPortalController::class, 'downloadConversationFile']);
         Route::patch('/orders/{salesTransaction}/items', [CustomerPortalController::class, 'updateOrderItems']);
         Route::get('/billing', [CustomerPortalController::class, 'billing']);
         Route::post('/billing/delete', [CustomerPortalController::class, 'deleteInvoices']);
@@ -106,6 +109,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'proposals']);
     Route::post('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'uploadProposal']);
     Route::post('/sales-transactions/{salesTransaction}/proceed-payment', [SalesTransactionController::class, 'proceedPayment']);
+    Route::post('/sales-transactions/{salesTransaction}/notes', [SalesTransactionController::class, 'replyConversation']);
+    Route::get('/sales-transactions/{salesTransaction}/conversation', [SalesTransactionController::class, 'conversation']);
+    Route::get('/sales-transactions/{salesTransaction}/files', [SalesTransactionController::class, 'downloadConversationFile']);
     Route::get('/customers', [CustomerController::class, 'index']);
     Route::post('/customers', [CustomerController::class, 'store']);
     Route::post('/customers/bulk-delete', [CustomerController::class, 'bulkDestroy']);
