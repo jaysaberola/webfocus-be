@@ -299,7 +299,7 @@ class CommerceAdminController extends Controller
         $openTickets = CustomerSupportTicket::query()->whereIn('status', ['Open', 'In Progress'])->count();
         $activeClients = User::role('customer')->where('is_active', true)->count();
         $activeServices = CustomerService::query()
-            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
+            ->whereIn('status', CustomerPortalProvisioner::activeStatusValues())
             ->count();
 
         return response()->json([

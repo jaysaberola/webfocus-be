@@ -2344,7 +2344,7 @@ class CustomerPortalController extends Controller
         return CustomerService::query()
             ->where('customer_id', $transaction->customer_id)
             ->where('title', $itemName)
-            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
+            ->whereIn('status', CustomerPortalProvisioner::activeStatusValues())
             ->whereNotNull('renew_at')
             ->where('renew_at', '<=', now()->addDays(7))
             ->exists();

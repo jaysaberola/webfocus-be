@@ -64,7 +64,7 @@ class CustomerPortalProvisionerApprovedAtTest extends TestCase
         $this->assertStringContainsString('[APPROVED_AT:2026-09-23T03:11:00+00:00]', $second);
     }
 
-    public function test_completed_provisioning_run_is_active_live(): void
+    public function test_completed_provisioning_run_is_active(): void
     {
         $run = new ProvisioningRun();
         $run->status = 'completed';
@@ -75,13 +75,14 @@ class CustomerPortalProvisionerApprovedAtTest extends TestCase
         $transaction->setRelation('provisioningRun', $run);
         $transaction->setRelation('paymentProofs', collect());
 
+        $this->assertSame('Active', CustomerPortalProvisioner::STATUS_ACTIVE);
         $this->assertSame(
             CustomerPortalProvisioner::STATUS_ACTIVE,
             CustomerPortalProvisioner::resolveServiceStatus($transaction)
         );
     }
 
-    public function test_finished_countdown_without_a_run_is_active_live(): void
+    public function test_finished_countdown_without_a_run_is_active(): void
     {
         $item = new \App\Models\SalesTransactionItem();
         $item->name = 'Business Hosting';
@@ -99,6 +100,16 @@ class CustomerPortalProvisionerApprovedAtTest extends TestCase
         $this->assertSame(
             CustomerPortalProvisioner::STATUS_ACTIVE,
             CustomerPortalProvisioner::resolveServiceStatus($transaction)
+        );
+    }
+
+    public function test_legacy_active_live_status_is_still_treated_as_active(): void
+    {
+        $this->assertTrue(CustomerPortalProvisioner::isActiveStatus('Active'));
+        $this->assertTrue(CustomerPortalProvisioner::isActiveStatus('Active Live'));
+        $this->assertSame(
+            ['Active', 'Active Live'],
+            CustomerPortalProvisioner::activeStatusValues()
         );
     }
 }

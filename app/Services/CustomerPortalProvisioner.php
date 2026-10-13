@@ -15,7 +15,9 @@ use Illuminate\Support\Facades\Schema;
 
 class CustomerPortalProvisioner
 {
-    public const STATUS_ACTIVE = 'Active Live';
+    public const STATUS_ACTIVE = 'Active';
+    /** @deprecated Legacy portal label; treat as active when reading older rows. */
+    public const STATUS_ACTIVE_LEGACY = 'Active Live';
     public const STATUS_PROVISIONING = 'Provisioning';
     public const STATUS_AWAITING_APPROVAL = 'Awaiting Approval';
     public const STATUS_PENDING = 'Pending Request';
@@ -182,7 +184,7 @@ class CustomerPortalProvisioner
         }
 
         $stored = trim((string) $service->status);
-        if ($stored === 'Active') {
+        if (self::isActiveStatus($stored)) {
             return self::STATUS_ACTIVE;
         }
 
@@ -191,7 +193,15 @@ class CustomerPortalProvisioner
 
     public static function isActiveStatus(?string $status): bool
     {
-        return in_array($status, ['Active', self::STATUS_ACTIVE], true);
+        return in_array($status, [self::STATUS_ACTIVE, self::STATUS_ACTIVE_LEGACY], true);
+    }
+
+    /**
+     * @return list<string>
+     */
+    public static function activeStatusValues(): array
+    {
+        return [self::STATUS_ACTIVE, self::STATUS_ACTIVE_LEGACY];
     }
 
     public function activateReadyForCustomer(int $customerId): void

@@ -15,21 +15,19 @@ return [
     ],
 
     /*
-    | These two staff accounts take turns as Client Owner / Sales Staff
-    | only when a customer first registers. Later orders keep that same owner.
-    | Change the emails here to swap the pair.
+    | Default Client Owner for new portal registrations (account create / first order).
+    | With a single email there is no alternation — every new ownerless client goes here.
+    | Later orders reuse that customer's existing owner. Existing owners are never changed.
     */
     'rotating_client_owners' => [
-        'myrna@webfocus.ph',
-        'durian.michelle@webfocus.ph',
+        'narrido.glenn@webfocus.ph',
     ],
 
     /*
-    | Same rotating pair used only for new customer registration.
+    | Same default assignee used only for new customer registration.
     | New service orders reuse the customer's already-assigned owner.
     */
     'rotating_sales_staff' => [
-        'myrna@webfocus.ph',
-        'durian.michelle@webfocus.ph',
+        'narrido.glenn@webfocus.ph',
     ],
 ];

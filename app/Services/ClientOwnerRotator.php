@@ -11,8 +11,9 @@ class ClientOwnerRotator
     /**
      * Attach a Client Owner / Sales Staff to a new order.
      *
-     * Rotation happens only on new customer registration.
-     * Later orders reuse that customer's existing owner — they do not rotate.
+     * Default owner assignment happens only on new customer registration
+     * (currently Sales Admin Glenn Narrido via config).
+     * Later orders reuse that customer's existing owner — they do not reassign.
      * Pass $explicitOwnerId when staff picked someone in the form.
      */
     public function assign(SalesTransaction $transaction, ?int $explicitOwnerId = null): ?User
@@ -46,8 +47,9 @@ class ClientOwnerRotator
     }
 
     /**
-     * Next rotating sales staff for a brand-new registration only.
-     * Alternates across recent customer registrations (not orders).
+     * Next default sales assignee for a brand-new registration only.
+     * With one configured email this always returns that Sales Admin.
+     * With multiple emails it still alternates across recent registrations.
      */
     public function nextSalesStaff(?int $exceptTransactionId = null): ?User
     {
@@ -83,8 +85,8 @@ class ClientOwnerRotator
     }
 
     /**
-     * The rotating sales owners (Myrna / Michelle by default). Falls back to
-     * rotating_client_owners when rotating_sales_staff is empty.
+     * Configured default sales owners for new portal registrations.
+     * Falls back to rotating_client_owners when rotating_sales_staff is empty.
      *
      * @return Collection<int, User>
      */
@@ -117,8 +119,8 @@ class ClientOwnerRotator
     }
 
     /**
-     * Assign the next rotating sales staff when a customer first registers.
-     * This is the only place that advances the Myrna ↔ Michelle rotation.
+     * Assign the default Sales Admin / Client Owner when a customer first registers.
+     * Skips customers that already have an owner (existing assignments stay unchanged).
      */
     public function assignOwnerToNewCustomer(User $customer): ?User
     {
@@ -160,8 +162,8 @@ class ClientOwnerRotator
     }
 
     /**
-     * Fallback for older customers with no owner yet: assign once via rotation,
-     * then keep that owner for future orders.
+     * Fallback for older customers with no owner yet: assign once via the
+     * default Sales Admin, then keep that owner for future orders.
      */
     private function assignOwnerToCustomerIfMissing(int $customerId): ?User
     {
@@ -221,7 +223,7 @@ class ClientOwnerRotator
     }
 
     /**
-     * Last rotating sales staff assigned on customer registration.
+     * Last default sales assignee used on customer registration (for multi-email rotation).
      */
     private function lastRegisteredCustomerOwnerId(): ?int
     {

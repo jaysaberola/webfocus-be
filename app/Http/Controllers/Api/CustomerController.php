@@ -37,10 +37,10 @@ class CustomerController extends Controller
         $customers = User::with([
                 'roles',
                 'owner:id,fname,lname,email',
-                'customerServices' => fn ($q) => $q->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])->orderBy('id'),
+                'customerServices' => fn ($q) => $q->whereIn('status', CustomerPortalProvisioner::activeStatusValues())->orderBy('id'),
             ])
             ->withCount([
-                'customerServices as active_services_count' => fn ($q) => $q->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE]),
+                'customerServices as active_services_count' => fn ($q) => $q->whereIn('status', CustomerPortalProvisioner::activeStatusValues()),
                 'salesTransactions as orders_count',
             ])
             ->role(self::ROLE)
@@ -544,7 +544,7 @@ class CustomerController extends Controller
 
         $existing = CustomerService::query()
             ->where('customer_id', $customer->id)
-            ->whereIn('status', ['Active', CustomerPortalProvisioner::STATUS_ACTIVE])
+            ->whereIn('status', CustomerPortalProvisioner::activeStatusValues())
             ->get();
 
         $renewAt = now()->addYear();
