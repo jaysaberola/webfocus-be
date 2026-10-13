@@ -708,7 +708,7 @@ class CommerceAdminController extends Controller
         $clientAlerts = collect();
         if ($canSeeQuotations) {
             $clientAlerts = $this->pendingWebDesignQuotationsQuery()
-                ->with(['customer:id,fname,lname,email,mname,owner_id', 'items'])
+                ->with(['customer:id,fname,lname,email,mname,owner_id,avatar', 'items'])
                 ->latest('transacted_at')
                 ->latest('id')
                 ->limit($perPage)
@@ -750,7 +750,7 @@ class CommerceAdminController extends Controller
         $proofs = $proofIds === []
             ? collect()
             : CustomerPaymentProof::query()
-                ->with(['customer:id,fname,lname,email,mname', 'salesTransaction.items'])
+                ->with(['customer:id,fname,lname,email,mname,avatar', 'salesTransaction.items'])
                 ->whereIn('id', $proofIds)
                 ->get()
                 ->keyBy('id');
@@ -764,14 +764,14 @@ class CommerceAdminController extends Controller
         $tickets = $ticketIds === []
             ? collect()
             : CustomerSupportTicket::query()
-                ->with('customer:id,fname,lname,email,mname')
+                ->with('customer:id,fname,lname,email,mname,avatar')
                 ->whereIn('id', $ticketIds)
                 ->get()
                 ->keyBy('id');
         $orders = $orderIds === []
             ? collect()
             : SalesTransaction::query()
-                ->with(['customer:id,fname,lname,email,mname', 'items'])
+                ->with(['customer:id,fname,lname,email,mname,avatar', 'items'])
                 ->whereIn('id', $orderIds)
                 ->get()
                 ->keyBy('id');
@@ -782,7 +782,7 @@ class CommerceAdminController extends Controller
                     'assignee:id,fname,lname,email',
                     'author:id,fname,lname,email',
                     'salesTransaction:id,transaction_no,customer_name,customer_email,customer_id',
-                    'salesTransaction.customer:id,fname,lname,email,mname',
+                    'salesTransaction.customer:id,fname,lname,email,mname,avatar',
                 ])
                 ->whereIn('id', $actionIds)
                 ->get()
@@ -1721,6 +1721,7 @@ class CommerceAdminController extends Controller
             'manageable' => false,
             'fromName' => $client,
             'fromEmail' => $row->customer_email ?: ($customer?->email),
+            'fromAvatarUrl' => StorageUrl::publicAsset($customer?->avatar),
             'attachments' => [],
             'details' => $this->webDesignQuotationDetails(
                 $row,
