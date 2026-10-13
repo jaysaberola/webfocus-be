@@ -92,6 +92,7 @@ class CustomerController extends Controller
                     'fname' => $customer->fname,
                     'lname' => User::usableLastName($customer->lname, $customer->mname),
                     'email' => $customer->email,
+                    'avatar' => $customer->avatar,
                     'type' => 'Customer',
                     'role' => $customer->getRoleNames()->first(),
                     'created_at' => $customer->created_at,
