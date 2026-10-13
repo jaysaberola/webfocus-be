@@ -1822,7 +1822,7 @@ class CustomerPortalController extends Controller
                     'Summary' => $change->summary,
                     'Submitted' => optional($change->created_at)->format('M j, Y g:i A'),
                 ]);
-                $avatarPath = $change->requested_payload['avatar_path'] ?? null;
+                $avatarPath = $change->resolvedAvatarPath();
                 $url = StorageUrl::publicAsset($avatarPath);
                 if ($url) {
                     $attachments[] = [
@@ -1961,20 +1961,24 @@ class CustomerPortalController extends Controller
 
     private function mapProfileChangeRequest(CustomerProfileChangeRequest $request): array
     {
-        $avatarPath = $request->requested_payload['avatar_path'] ?? null;
+        $avatarPath = $request->resolvedAvatarPath();
+        $isPending = $request->status === 'Pending Review';
 
         return [
             'id' => $request->id,
             'reference' => $request->request_no,
             'submittedAt' => optional($request->created_at)->format('M j, Y g:i A'),
-            'status' => $request->status === 'Pending Review'
+            'status' => $isPending
                 ? 'Pending Admin Review'
                 : $request->status,
             'summary' => $request->summary,
             'requestedPayload' => $request->requested_payload,
             'currentSnapshot' => $request->current_snapshot,
-            'pendingAvatarUrl' => StorageUrl::publicAsset($avatarPath),
-            'currentAvatarUrl' => StorageUrl::publicAsset($request->current_snapshot['avatar'] ?? null),
+            // Only expose a pending preview while the request is still awaiting review.
+            'pendingAvatarUrl' => $isPending ? StorageUrl::publicAsset($avatarPath) : null,
+            'currentAvatarUrl' => StorageUrl::publicAsset(
+                $request->customer?->avatar ?? ($request->current_snapshot['avatar'] ?? null)
+            ),
         ];
     }
 

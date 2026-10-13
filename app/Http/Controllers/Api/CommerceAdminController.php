@@ -505,19 +505,26 @@ class CommerceAdminController extends Controller
             'address_zip' => $payload['address_zip'] ?? $customer->address_zip,
         ];
 
+        $requestUpdate = [
+            'status' => 'Approved',
+            'reviewed_at' => now(),
+        ];
+
         if (!empty($payload['avatar_path'])) {
-            $updates['avatar'] = $this->resolveApprovedProfileAvatarPath(
+            $approvedAvatarPath = $this->resolveApprovedProfileAvatarPath(
                 $customer,
                 $payload['avatar_path']
             );
+            $updates['avatar'] = $approvedAvatarPath;
+            // Keep the request payload pointing at the live file so inbox / approval
+            // previews still resolve after the pending upload is moved into avatars/.
+            $payload['avatar_path'] = $approvedAvatarPath;
+            $requestUpdate['requested_payload'] = $payload;
         }
 
         $customer->update($updates);
 
-        $profileChangeRequest->update([
-            'status' => 'Approved',
-            'reviewed_at' => now(),
-        ]);
+        $profileChangeRequest->update($requestUpdate);
 
         CustomerNotification::create([
             'customer_id' => $customer->id,
@@ -915,7 +922,7 @@ class CommerceAdminController extends Controller
             : ($customer?->full_name ?? 'Customer'));
         $payload = $request->requested_payload ?? [];
         $changes = $this->profileChangeFields($request);
-        $avatarPath = $payload['avatar_path'] ?? null;
+        $avatarPath = $request->resolvedAvatarPath();
 
         return [
             'id' => $request->id,
@@ -972,8 +979,8 @@ class CommerceAdminController extends Controller
         }
 
         $currentAvatar = $current['avatar'] ?? null;
-        $requestedAvatar = $requested['avatar_path'] ?? null;
-        if ($requestedAvatar) {
+        $requestedAvatar = $request->resolvedAvatarPath() ?: ($requested['avatar_path'] ?? null);
+        if ($requestedAvatar || ($requested['avatar_path'] ?? null)) {
             $changes[] = [
                 'field' => 'avatar',
                 'label' => 'Profile Photo',
@@ -1386,6 +1393,7 @@ class CommerceAdminController extends Controller
 
         $fromName = null;
         $fromEmail = null;
+        $fromAvatarUrl = null;
         $attachments = [];
         $details = [];
         $intro = (string) $row->body;
@@ -1406,6 +1414,7 @@ class CommerceAdminController extends Controller
                 $firstItem = $items?->first();
                 $fromName = $this->clientDisplayName($customer);
                 $fromEmail = $customer?->email;
+                $fromAvatarUrl = StorageUrl::publicAsset($customer?->avatar);
                 $transactionNo = $transaction?->transaction_no ?: $proof->invoice_id;
                 $alreadyPaid = $this->isTransactionPaid($transaction);
                 $intro = $alreadyPaid
@@ -1439,6 +1448,11 @@ class CommerceAdminController extends Controller
                 $status = (string) ($change->status ?: 'Pending Review');
                 $fromName = $this->clientDisplayName($change->customer);
                 $fromEmail = $change->customer?->email;
+                $fromAvatarUrl = StorageUrl::publicAsset(
+                    $change->status === 'Approved'
+                        ? ($change->customer?->avatar ?: $change->resolvedAvatarPath())
+                        : $change->resolvedAvatarPath()
+                );
                 $intro = "{$fromName} submitted a profile update that needs approval before it is applied.";
                 $details = $this->inboxDetails([
                     'Client' => $fromName,
@@ -1457,8 +1471,7 @@ class CommerceAdminController extends Controller
                         'value' => ($changeRow['from'] ?? '—') . ' → ' . ($changeRow['to'] ?? '—'),
                     ];
                 }
-                $payload = $change->requested_payload ?? [];
-                $avatarPath = $payload['avatar_path'] ?? null;
+                $avatarPath = $change->resolvedAvatarPath();
                 $url = StorageUrl::publicAsset($avatarPath);
                 if ($url) {
                     $attachments[] = [
@@ -1472,6 +1485,7 @@ class CommerceAdminController extends Controller
             if ($ticket) {
                 $fromName = $this->clientDisplayName($ticket->customer);
                 $fromEmail = $ticket->customer?->email;
+                $fromAvatarUrl = StorageUrl::publicAsset($ticket->customer?->avatar);
                 $intro = "{$fromName} submitted a support ticket that needs a response.";
                 $details = $this->inboxDetails([
                     'Client' => $fromName,
@@ -1489,6 +1503,7 @@ class CommerceAdminController extends Controller
                 $customer = $order->customer;
                 $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
                 $fromEmail = $customer?->email ?: $order->customer_email;
+                $fromAvatarUrl = StorageUrl::publicAsset($customer?->avatar);
                 $transactionNo = $order->transaction_no;
                 $itemNames = $order->items ? $order->items->pluck('name')->filter()->take(4)->implode(', ') : '';
                 $intro = "{$fromName} cancelled this order. Review the deal record if follow-up is needed.";
@@ -1508,6 +1523,7 @@ class CommerceAdminController extends Controller
                 $customer = $order->customer;
                 $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
                 $fromEmail = $customer?->email ?: $order->customer_email;
+                $fromAvatarUrl = StorageUrl::publicAsset($customer?->avatar);
                 $transactionNo = $order->transaction_no;
                 $referenceId = (int) $order->id;
                 $preview = WebDesignMeta::inboxPreviewSuffix($order->notes);
@@ -1539,6 +1555,7 @@ class CommerceAdminController extends Controller
                 $customer = $order?->customer;
                 $fromName = $this->clientDisplayName($customer) ?: ($order?->customer_name ?: 'Client');
                 $fromEmail = $customer?->email ?: $order?->customer_email;
+                $fromAvatarUrl = StorageUrl::publicAsset($customer?->avatar);
                 $transactionNo = $order?->transaction_no;
                 $referenceId = (int) ($order?->id ?: 0) ?: null;
                 $assigneeName = trim(($action->assignee?->fname ?? '') . ' ' . ($action->assignee?->lname ?? '')) ?: 'Unassigned';
@@ -1572,6 +1589,7 @@ class CommerceAdminController extends Controller
                 $customer = $order->customer;
                 $fromName = $this->clientDisplayName($customer) ?: ($order->customer_name ?: 'Client');
                 $fromEmail = $customer?->email ?: $order->customer_email;
+                $fromAvatarUrl = StorageUrl::publicAsset($customer?->avatar);
                 $transactionNo = $order->transaction_no;
                 $referenceId = (int) $order->id;
                 $intro = (string) $row->body;
@@ -1644,6 +1662,7 @@ class CommerceAdminController extends Controller
             'referenceId' => $referenceId,
             'fromName' => $fromName,
             'fromEmail' => $fromEmail,
+            'fromAvatarUrl' => $fromAvatarUrl,
             'attachments' => $attachments,
             'details' => $details,
             'actionLabel' => $this->inboxActionLabel($kind, $actionUrl),
