@@ -156,6 +156,9 @@ class DealMeta
 
         $value = preg_replace('#^https?://#i', '', $value) ?? $value;
         $value = strtolower(trim(explode('/', $value)[0] ?? $value, '.'));
+        if (WebDesignMeta::isAttachmentLabel($value)) {
+            return '';
+        }
 
         return $value;
     }
