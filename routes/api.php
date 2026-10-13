@@ -37,12 +37,15 @@ use App\Http\Controllers\Api\ProvisioningController;
 use App\Http\Controllers\Api\DomainLookupController;
 use App\Http\Controllers\Api\PaynamicsPaymentController;
 use App\Http\Controllers\Api\AccountController;
+use App\Http\Controllers\Api\CmsHelpProgressController;
 
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/customer-login', [AuthController::class, 'customerLogin']);
 Route::post('/register-customer', [AuthController::class, 'registerCustomer']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/user', [AccountController::class, 'me']);
+    Route::get('/cms-help/progress', [CmsHelpProgressController::class, 'index']);
+    Route::put('/cms-help/progress/{guideId}', [CmsHelpProgressController::class, 'upsert']);
     Route::post('/user/profile', [AccountController::class, 'updateProfile']);
     Route::put('/user/email', [AccountController::class, 'updateEmail']);
     Route::put('/user/password', [AccountController::class, 'updatePassword']);
