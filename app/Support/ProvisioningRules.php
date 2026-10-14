@@ -18,6 +18,8 @@ class ProvisioningRules
 
     public const CHECKPOINT_WEBDEV = 24;
 
+    public const SAMPLE_TEST_MINUTES = 5;
+
     public static function isWebDevItem(string $name, ?string $itemType = null): bool
     {
         $type = strtolower(trim((string) $itemType));
@@ -48,9 +50,16 @@ class ProvisioningRules
             || str_contains($haystack, 'bare-metal');
     }
 
+    public static function isSampleTestAddon(string $name, ?string $itemType = null): bool
+    {
+        $haystack = strtolower(trim($name . ' ' . (string) $itemType));
+
+        return str_contains($haystack, 'sample test');
+    }
+
     public static function standardHours(string $name, ?string $itemType = null): int
     {
-        if (self::isBareMetalName($name, $itemType)) {
+        if (self::isBareMetalName($name, $itemType) || self::isSampleTestAddon($name, $itemType)) {
             return 0;
         }
 
@@ -65,7 +74,7 @@ class ProvisioningRules
 
     /**
      * @param  iterable<int, object|array<string, mixed>>  $items
-     * @return array{timeline: string, durationHours: int|null}
+     * @return array{timeline: string, durationHours: int|null, durationMinutes: int|null}
      */
     public static function timelineFor(iterable $items, bool $orderIsWebDesign): array
     {
@@ -73,16 +82,22 @@ class ProvisioningRules
             return [
                 'timeline' => 'webdev',
                 'durationHours' => null,
+                'durationMinutes' => null,
             ];
         }
 
         $hours = 0;
         $hasBareMetal = false;
+        $hasSampleTest = false;
         $hasTimedWork = false;
         foreach ($items as $item) {
             $name = is_array($item) ? (string) ($item['name'] ?? '') : (string) ($item->name ?? '');
             $type = is_array($item) ? ($item['item_type'] ?? null) : ($item->item_type ?? null);
             $itemType = is_string($type) ? $type : null;
+            if (self::isSampleTestAddon($name, $itemType)) {
+                $hasSampleTest = true;
+                continue;
+            }
             if (self::isBareMetalName($name, $itemType)) {
                 $hasBareMetal = true;
                 continue;
@@ -94,17 +109,41 @@ class ProvisioningRules
             }
         }
 
+        if ($hasSampleTest && ! $hasTimedWork) {
+            return [
+                'timeline' => 'standard',
+                'durationHours' => null,
+                'durationMinutes' => self::SAMPLE_TEST_MINUTES,
+            ];
+        }
+
         if ($hasBareMetal && ! $hasTimedWork) {
             return [
                 'timeline' => 'standard',
                 'durationHours' => null,
+                'durationMinutes' => null,
             ];
         }
 
         return [
             'timeline' => 'standard',
             'durationHours' => $hours > 0 ? $hours : self::STANDARD_HOURS,
+            'durationMinutes' => null,
         ];
+    }
+
+    public static function countdownEnd(Carbon $startedAt, ?int $durationHours, ?int $durationMinutes = null): ?Carbon
+    {
+        $minutes = (int) $durationMinutes;
+        $hours = (int) $durationHours;
+        if ($minutes > 0 && $hours <= 0) {
+            return $startedAt->copy()->addMinutes($minutes);
+        }
+        if ($hours <= 0) {
+            return null;
+        }
+
+        return $startedAt->copy()->addHours($hours);
     }
 
     public static function checkpointFor(string $timeline): int

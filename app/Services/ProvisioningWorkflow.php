@@ -36,13 +36,16 @@ class ProvisioningWorkflow
         $transaction->loadMissing('items');
         $plan = ProvisioningRules::timelineFor($transaction->items, WebDesignQuotation::isWebDesign($transaction));
         $now = now();
-        $startsNow = $plan['timeline'] !== 'webdev' && ! empty($plan['durationHours']);
+        $durationHours = (int) ($plan['durationHours'] ?? 0);
+        $durationMinutes = (int) ($plan['durationMinutes'] ?? 0);
+        $startsNow = $plan['timeline'] !== 'webdev' && ($durationHours > 0 || $durationMinutes > 0);
 
-        return DB::transaction(function () use ($transaction, $actor, $proofNo, $plan, $now, $startsNow) {
+        return DB::transaction(function () use ($transaction, $actor, $proofNo, $plan, $now, $startsNow, $durationHours, $durationMinutes) {
             $run = ProvisioningRun::create([
                 'sales_transaction_id' => $transaction->id,
                 'timeline' => $plan['timeline'],
-                'duration_hours' => $plan['durationHours'],
+                'duration_hours' => $durationHours > 0 ? $durationHours : null,
+                'duration_minutes' => $durationMinutes > 0 && $durationHours <= 0 ? $durationMinutes : null,
                 'status' => 'provisioning',
                 'approved_at' => $now,
                 'approved_by' => $actor->id,
@@ -55,14 +58,16 @@ class ProvisioningWorkflow
             ]);
 
             if ($startsNow) {
-                $hours = (int) $plan['durationHours'];
+                $windowLabel = $durationMinutes > 0 && $durationHours <= 0
+                    ? "{$durationMinutes} minutes"
+                    : "{$durationHours} hours";
                 $this->record(
                     $run,
                     $actor,
                     'provisioning_started',
-                    "Provisioning started with a {$hours}-hour countdown.",
+                    "Provisioning started with a {$windowLabel} countdown.",
                     [
-                        ['label' => 'Countdown', 'from' => 'Not started', 'to' => "{$hours} hours"],
+                        ['label' => 'Countdown', 'from' => 'Not started', 'to' => $windowLabel],
                     ]
                 );
             } elseif ($plan['timeline'] === 'webdev') {
@@ -487,11 +492,17 @@ class ProvisioningWorkflow
             return now()->greaterThanOrEqualTo($run->webdev_started_at->copy()->addDays((int) $run->webdev_days));
         }
 
-        if (! $run->countdown_started_at || ! $run->duration_hours) {
+        if (! $run->countdown_started_at) {
             return false;
         }
 
-        return now()->greaterThanOrEqualTo($run->countdown_started_at->copy()->addHours((int) $run->duration_hours));
+        $end = ProvisioningRules::countdownEnd(
+            $run->countdown_started_at,
+            $run->duration_hours,
+            $run->duration_minutes
+        );
+
+        return $end !== null && now()->greaterThanOrEqualTo($end);
     }
 
     private function actionDueAt(ProvisioningRun $run): ?Carbon
@@ -504,11 +515,15 @@ class ProvisioningWorkflow
             return $run->webdev_started_at->copy()->addDays((int) $run->webdev_days);
         }
 
-        if (! $run->countdown_started_at || ! $run->duration_hours) {
+        if (! $run->countdown_started_at) {
             return null;
         }
 
-        return $run->countdown_started_at->copy()->addHours((int) $run->duration_hours);
+        return ProvisioningRules::countdownEnd(
+            $run->countdown_started_at,
+            $run->duration_hours,
+            $run->duration_minutes
+        );
     }
 
     private function countdownPayload(ProvisioningRun $run, bool $webdev): array
@@ -543,39 +558,47 @@ class ProvisioningWorkflow
             ];
         }
 
-        if (! $run->duration_hours) {
+        $minutes = (int) $run->duration_minutes;
+        $hours = (int) $run->duration_hours;
+        if ($minutes <= 0 && $hours <= 0) {
             return [
                 'started' => false,
                 'startedAt' => null,
                 'endsAt' => null,
                 'durationHours' => null,
+                'durationMinutes' => null,
                 'durationDays' => null,
                 'startedBy' => null,
                 'label' => 'Bare metal orders are excluded from the 48-hour turnaround',
             ];
         }
 
-        $hours = (int) $run->duration_hours;
+        $usesMinutes = $minutes > 0 && $hours <= 0;
+        $windowLabel = $usesMinutes ? "{$minutes}-minute" : "{$hours}-hour";
         if (! $run->countdown_started_at) {
             return [
                 'started' => false,
                 'startedAt' => null,
                 'endsAt' => null,
-                'durationHours' => $hours,
+                'durationHours' => $usesMinutes ? null : $hours,
+                'durationMinutes' => $usesMinutes ? $minutes : null,
                 'durationDays' => null,
                 'startedBy' => null,
-                'label' => "{$hours}-hour provisioning window has not started",
+                'label' => "{$windowLabel} provisioning window has not started",
             ];
         }
+
+        $endsAt = ProvisioningRules::countdownEnd($run->countdown_started_at, $hours, $minutes);
 
         return [
             'started' => true,
             'startedAt' => $run->countdown_started_at->toIso8601String(),
-            'endsAt' => $run->countdown_started_at->copy()->addHours($hours)->toIso8601String(),
-            'durationHours' => $hours,
+            'endsAt' => $endsAt?->toIso8601String(),
+            'durationHours' => $usesMinutes ? null : $hours,
+            'durationMinutes' => $usesMinutes ? $minutes : null,
             'durationDays' => null,
             'startedBy' => null,
-            'label' => "{$hours}-hour provisioning window",
+            'label' => "{$windowLabel} provisioning window",
         ];
     }
 

@@ -103,6 +103,33 @@ class CustomerPortalProvisionerApprovedAtTest extends TestCase
         );
     }
 
+    public function test_sample_test_addon_becomes_active_five_minutes_after_approval(): void
+    {
+        $item = new \App\Models\SalesTransactionItem();
+        $item->name = 'Add Ons_Sample Test';
+        $item->item_type = 'addon';
+
+        $transaction = new SalesTransaction();
+        $transaction->payment_status = 'paid';
+        $transaction->order_status = 'processing';
+        $transaction->notes = '[APPROVED_AT:2026-10-14T09:00:00+08:00]';
+        $transaction->setRelation('provisioningRun', null);
+        $transaction->setRelation('paymentProofs', collect());
+        $transaction->setRelation('items', collect([$item]));
+
+        Carbon::setTestNow(Carbon::parse('2026-10-14T09:04:00+08:00'));
+        $this->assertFalse(CustomerPortalProvisioner::isProvisioningFinished($transaction));
+
+        Carbon::setTestNow(Carbon::parse('2026-10-14T09:05:00+08:00'));
+        $this->assertTrue(CustomerPortalProvisioner::isProvisioningFinished($transaction));
+        $this->assertSame(
+            CustomerPortalProvisioner::STATUS_ACTIVE,
+            CustomerPortalProvisioner::resolveServiceStatus($transaction)
+        );
+
+        Carbon::setTestNow();
+    }
+
     public function test_legacy_active_live_status_is_still_treated_as_active(): void
     {
         $this->assertTrue(CustomerPortalProvisioner::isActiveStatus('Active'));

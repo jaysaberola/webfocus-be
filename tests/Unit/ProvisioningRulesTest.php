@@ -55,6 +55,29 @@ class ProvisioningRulesTest extends TestCase
         $this->assertSame(0, ProvisioningRules::standardHours('Dedicated Bare Metal Enterprise'));
     }
 
+    public function test_sample_test_addon_uses_a_five_minute_window(): void
+    {
+        $sample = ProvisioningRules::timelineFor([
+            ['name' => 'Add Ons_Sample Test', 'item_type' => 'addon'],
+        ], false);
+        $mixed = ProvisioningRules::timelineFor([
+            ['name' => 'Add Ons_Sample Test', 'item_type' => 'addon'],
+            ['name' => 'Business Hosting', 'item_type' => 'service'],
+        ], false);
+
+        $this->assertNull($sample['durationHours']);
+        $this->assertSame(5, $sample['durationMinutes']);
+        $this->assertSame(48, $mixed['durationHours']);
+        $this->assertNull($mixed['durationMinutes']);
+
+        $start = Carbon::parse('2026-10-14 09:00:00');
+        $this->assertTrue(
+            $start->copy()->addMinutes(5)->equalTo(
+                ProvisioningRules::countdownEnd($start, $sample['durationHours'], $sample['durationMinutes'])
+            )
+        );
+    }
+
     public function test_done_inside_the_countdown_becomes_completed_then_active_after_the_checkpoint(): void
     {
         $doneAt = Carbon::parse('2026-10-02 08:00:00');

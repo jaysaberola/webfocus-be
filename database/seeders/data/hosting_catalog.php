@@ -256,6 +256,7 @@ return [
             ['slug' => 'addon-baremetal-storage', 'name' => 'Storage', 'price' => 3000, 'description' => 'Additional 1TB enterprise NVMe storage expansion'],
         ],
         'universal' => [
+            ['slug' => 'addon-universal-sample-test', 'name' => 'Add Ons_Sample Test', 'price' => 100, 'label' => 'Add-on', 'description' => 'Test add-on. After payment is approved, provisioning finishes in 5 minutes.'],
             ['slug' => 'addon-universal-whois', 'name' => 'Add Ons_WhoIs', 'price' => 780, 'label' => 'Add-on'],
             ['slug' => 'addon-universal-static-ip', 'name' => 'Add Ons_Static IP', 'price' => 3000, 'label' => 'Add-on'],
             ['slug' => 'addon-universal-sitelock', 'name' => 'Add Ons_Sitelock', 'price' => 14160, 'label' => 'Add-on'],

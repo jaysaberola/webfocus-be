@@ -263,9 +263,16 @@ class CustomerPortalProvisioner
         }
 
         $plan = ProvisioningRules::timelineFor($transaction->items, false);
-        $hours = (int) ($plan['durationHours'] ?: ProvisioningRules::STANDARD_HOURS);
+        $end = ProvisioningRules::countdownEnd(
+            Carbon::parse($approvedAt),
+            $plan['durationHours'] ?? null,
+            $plan['durationMinutes'] ?? null
+        );
+        if ($end === null) {
+            $end = Carbon::parse($approvedAt)->addHours(ProvisioningRules::STANDARD_HOURS);
+        }
 
-        return now()->greaterThanOrEqualTo(Carbon::parse($approvedAt)->addHours($hours));
+        return now()->greaterThanOrEqualTo($end);
     }
 
     private static function provisioningRunFor(SalesTransaction $transaction): ?ProvisioningRun
@@ -291,11 +298,17 @@ class CustomerPortalProvisioner
             return now()->greaterThanOrEqualTo($run->webdev_started_at->copy()->addDays((int) $run->webdev_days));
         }
 
-        if (! $run->countdown_started_at || ! $run->duration_hours) {
+        if (! $run->countdown_started_at) {
             return false;
         }
 
-        return now()->greaterThanOrEqualTo($run->countdown_started_at->copy()->addHours((int) $run->duration_hours));
+        $end = ProvisioningRules::countdownEnd(
+            $run->countdown_started_at,
+            $run->duration_hours,
+            $run->duration_minutes
+        );
+
+        return $end !== null && now()->greaterThanOrEqualTo($end);
     }
 
     public static function hasUnverifiedPaymentProof(SalesTransaction $transaction): bool

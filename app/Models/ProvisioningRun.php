@@ -12,6 +12,7 @@ class ProvisioningRun extends Model
         'sales_transaction_id',
         'timeline',
         'duration_hours',
+        'duration_minutes',
         'webdev_days',
         'status',
         'approved_at',
@@ -24,6 +25,7 @@ class ProvisioningRun extends Model
 
     protected $casts = [
         'duration_hours' => 'integer',
+        'duration_minutes' => 'integer',
         'webdev_days' => 'integer',
         'approved_at' => 'datetime',
         'countdown_started_at' => 'datetime',
