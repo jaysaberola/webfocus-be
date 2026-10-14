@@ -560,8 +560,6 @@ class SalesTransactionController extends Controller
             ]);
         }
 
-        $wasPendingQuote = WebDesignQuotation::isPendingQuotation($salesTransaction)
-            && (float) $salesTransaction->grand_total <= 0;
         $previousGrandTotal = round((float) $salesTransaction->grand_total, 2);
         $previousSalesNotes = DealMeta::salesNotes($salesTransaction->notes)
             ?: WebDesignMeta::salesNotes($salesTransaction->notes);
@@ -619,18 +617,22 @@ class SalesTransactionController extends Controller
                 }
             }
         }
+        $quoteSent = false;
         if (
             WebDesignQuotation::isWebDesign($salesTransaction)
             && $nextQuoted > 0
             && (abs($nextQuoted - $previousGrandTotal) >= 0.01 || $linePricesChanged)
         ) {
-            $validated['notes'] = DealMeta::pinQuotedPrice($validated['notes'] ?? null, $nextQuoted, [
+            $notesBeforeQuote = (string) ($validated['notes'] ?? '');
+            $validated['notes'] = DealMeta::pinQuotedPrice($notesBeforeQuote, $nextQuoted, [
                 'orderNo' => (string) $salesTransaction->transaction_no,
                 'items' => is_array($items) ? $items : $salesTransaction->items,
                 'subtotal' => (float) ($validated['subtotal'] ?? 0),
                 'discount' => (float) ($validated['discount_total'] ?? 0),
                 'tax' => (float) ($validated['tax_total'] ?? 0),
+                'refreshLines' => $linePricesChanged,
             ]);
+            $quoteSent = (string) $validated['notes'] !== $notesBeforeQuote;
         }
 
         $explicitOwnerId = array_key_exists('client_owner_id', $validated)
@@ -667,34 +669,19 @@ class SalesTransactionController extends Controller
         }
 
         $fresh = $salesTransaction->fresh(['items']);
-        if (
-            $fresh
-            && $fresh->customer_id
-            && (
-                ($wasPendingQuote && WebDesignQuotation::displayAmount($fresh) > 0)
-                || DealMeta::quotedPrice($fresh->notes) > 0
-            )
-            && abs((float) $fresh->grand_total - $previousGrandTotal) >= 0.01
-        ) {
-            $this->notifyCustomerQuotationPriced($fresh);
-        }
-        $pricedAmount = $fresh ? WebDesignQuotation::displayAmount($fresh) : 0.0;
-        if (
-            $fresh
-            && WebDesignQuotation::isWebDesign($fresh)
-            && $pricedAmount > 0
-            && abs($pricedAmount - $previousGrandTotal) >= 0.01
-        ) {
+        if ($fresh && $quoteSent) {
+            $this->notifyCustomerQuotationPriced($fresh, $previousGrandTotal > 0);
             $actor = $request->user();
             $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? '')));
-            $this->notifyAdminQuotationPriced($fresh, $actorName !== '' ? $actorName : 'Sales');
+            $this->notifyAdminQuotationPriced($fresh, $actorName !== '' ? $actorName : 'Sales', $previousGrandTotal > 0);
         }
-        if ($fresh && $fresh->customer_id) {
+        if ($fresh && $fresh->customer_id && ! $quoteSent) {
             $this->notifyDealConversation($fresh, $previousSalesNotes, $request->user());
         }
 
         return response()->json([
             'message' => 'Sales transaction updated successfully',
+            'quoted_price_sent' => $quoteSent,
             'data' => $salesTransaction->fresh()->load($this->transactionRelations()),
         ]);
     }
@@ -1160,7 +1147,7 @@ class SalesTransactionController extends Controller
         }
     }
 
-    private function notifyCustomerQuotationPriced(SalesTransaction $transaction): void
+    private function notifyCustomerQuotationPriced(SalesTransaction $transaction, bool $updated = false): void
     {
         if (! $transaction->customer_id) {
             return;
@@ -1170,29 +1157,34 @@ class SalesTransactionController extends Controller
         $amount = DealMeta::quotedPrice($transaction->notes)
             ?: round((float) $transaction->grand_total, 2)
             ?: WebDesignQuotation::displayAmount($transaction);
+        $summary = DealMeta::quoteSummary($amount, $transaction->notes, [
+            'orderNo' => (string) $transaction->transaction_no,
+            'items' => $transaction->items,
+            'subtotal' => (float) $transaction->subtotal,
+            'discount' => (float) $transaction->discount_total,
+            'tax' => (float) $transaction->tax_total,
+        ]);
 
-        CustomerNotification::query()->updateOrCreate(
+        $notice = CustomerNotification::query()->updateOrCreate(
             [
                 'customer_id' => $transaction->customer_id,
                 'reference_key' => 'webdesign-quotation-priced:'.$transaction->id,
             ],
             [
-                'title' => 'Quoted price is ready',
-                'body' => DealMeta::quoteSummary($amount, $transaction->notes, [
-                    'orderNo' => (string) $transaction->transaction_no,
-                    'items' => $transaction->items,
-                    'subtotal' => (float) $transaction->subtotal,
-                    'discount' => (float) $transaction->discount_total,
-                    'tax' => (float) $transaction->tax_total,
-                ]),
+                'title' => $updated ? 'Quoted price updated' : 'Quoted price is ready',
+                'body' => $summary,
                 'type' => 'order',
                 'action_url' => '/public/dashboard?tab=orders',
                 'read_at' => null,
             ]
         );
+        $notice->forceFill([
+            'created_at' => now(),
+            'read_at' => null,
+        ])->save();
     }
 
-    private function notifyAdminQuotationPriced(SalesTransaction $transaction, string $actorName): void
+    private function notifyAdminQuotationPriced(SalesTransaction $transaction, string $actorName, bool $updated = false): void
     {
         $transaction->loadMissing(['items']);
         $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes);
@@ -1204,7 +1196,7 @@ class SalesTransactionController extends Controller
             ->implode('; ');
         $clientLabel = trim((string) ($transaction->customer_name ?: 'Client'));
 
-        $body = $actorName.' set the quotation amount for '
+        $body = $actorName.($updated ? ' updated the quotation amount for ' : ' set the quotation amount for ')
             .$transaction->transaction_no
             .($clientLabel !== '' ? " ({$clientLabel})" : '')
             .($itemNames ? " · {$itemNames}" : '')
@@ -1217,12 +1209,18 @@ class SalesTransactionController extends Controller
             $transaction->customer_id ? (int) $transaction->customer_id : null,
             ['sales_admin', 'admin', 'customer_care', 'sales_staff'],
             'admin:webdesign-priced:'.$transaction->id,
-            'Quotation amount set',
+            $updated ? 'Quotation amount updated' : 'Quotation amount set',
             $body,
             'web_design_quotation',
             '/public/commerce-admin?tab=orders',
             false,
         );
+        CustomerNotification::query()
+            ->where('reference_key', 'admin:webdesign-priced:'.$transaction->id)
+            ->update([
+                'created_at' => now(),
+                'read_at' => null,
+            ]);
     }
 
     private function readableReply(string $notes): string

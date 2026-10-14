@@ -108,4 +108,38 @@ class DealMetaDatesTest extends TestCase
         $this->assertStringContainsString('Pending Quotation', $last['text']);
         $this->assertSame($next, DealMeta::pinQuotedPrice($next, 19756));
     }
+
+    public function test_a_changed_quote_is_sent_as_a_new_message_after_the_customer_reply(): void
+    {
+        $notes = '[DEAL_META]{"dealName":"Business Starter Launch | Mailing List","productCategory":"Web Development","dealAmounts":{"Business Starter Launch":1000,"Mailing List":1111}}';
+        $first = DealMeta::pinQuotedPrice($notes, 1800, [
+            'orderNo' => 'ST-20261014-0005',
+            'items' => [
+                ['name' => 'Business Starter Launch', 'price' => 900, 'total' => 900],
+                ['name' => 'Mailing List', 'price' => 900, 'total' => 900],
+            ],
+            'subtotal' => 1800,
+        ]);
+        $withReply = DealMeta::appendMessage($first, 'client', 'ayoko niyan');
+        $second = DealMeta::pinQuotedPrice($withReply, 2111, [
+            'orderNo' => 'ST-20261014-0005',
+            'items' => [
+                ['name' => 'Business Starter Launch', 'price' => 1000, 'total_price' => 1000],
+                ['name' => 'Mailing List', 'price' => 1111, 'total_price' => 1111],
+            ],
+            'subtotal' => 2111,
+            'refreshLines' => true,
+        ]);
+
+        $thread = DealMeta::conversation($second);
+        $this->assertCount(3, $thread);
+        $this->assertSame('client', $thread[1]['from']);
+        $this->assertSame('ayoko niyan', $thread[1]['text']);
+        $this->assertSame('sales', $thread[2]['from']);
+        $this->assertStringContainsString('A quoted price is ready for ST-20261014-0005.', $thread[2]['text']);
+        $this->assertStringContainsString('Business Starter Launch — ₱1,000.00', $thread[2]['text']);
+        $this->assertStringContainsString('Mailing List — ₱1,111.00', $thread[2]['text']);
+        $this->assertStringContainsString('Grand total: ₱2,111.00', $thread[2]['text']);
+        $this->assertStringContainsString('Grand total: ₱1,800.00', $thread[0]['text']);
+    }
 }
