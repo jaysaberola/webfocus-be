@@ -228,4 +228,28 @@ class WebDesignMetaTest extends TestCase
         $this->assertSame('Included service', $rows[2]['label']);
         $this->assertSame('Pop up Message/Advisory — ₱800.00', $rows[2]['value']);
     }
+
+    public function test_amount_detail_rows_use_edited_amounts_instead_of_the_old_item_price(): void
+    {
+        $notes = '[DEAL_META]{"dealAmounts":{"High-Concurrency E-Commerce Plus":1000,"Dashboard":111}}';
+
+        $rows = WebDesignMeta::amountDetailRows([
+            [
+                'name' => 'High-Concurrency E-Commerce Plus',
+                'itemType' => 'web_design',
+                'price' => 25000,
+                'total' => 25000,
+            ],
+            [
+                'name' => 'Dashboard',
+                'detail' => 'Dashboard',
+                'itemType' => 'web_design_addon',
+                'price' => 500,
+                'total' => 500,
+            ],
+        ], $notes);
+
+        $this->assertSame('High-Concurrency E-Commerce Plus — ₱1,000.00', $rows[0]['value']);
+        $this->assertSame('Dashboard — ₱111.00', $rows[1]['value']);
+    }
 }

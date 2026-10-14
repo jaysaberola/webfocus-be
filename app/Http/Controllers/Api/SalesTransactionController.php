@@ -603,10 +603,26 @@ class SalesTransactionController extends Controller
         }
 
         $nextQuoted = round((float) ($validated['grand_total'] ?? 0), 2);
+        $linePricesChanged = false;
+        $salesTransaction->loadMissing('items');
+        if (is_array($items)) {
+            $previousLines = $salesTransaction->items->mapWithKeys(function ($item) {
+                return [strtolower(trim((string) $item->name)) => round((float) $item->total_price, 2)];
+            });
+            foreach ($items as $item) {
+                $key = strtolower(trim((string) ($item['name'] ?? '')));
+                $nextLine = round((float) ($item['total_price'] ?? $item['price'] ?? 0), 2);
+                $previousLine = round((float) ($previousLines[$key] ?? -1), 2);
+                if (abs($previousLine - $nextLine) >= 0.01) {
+                    $linePricesChanged = true;
+                    break;
+                }
+            }
+        }
         if (
             WebDesignQuotation::isWebDesign($salesTransaction)
             && $nextQuoted > 0
-            && abs($nextQuoted - $previousGrandTotal) >= 0.01
+            && (abs($nextQuoted - $previousGrandTotal) >= 0.01 || $linePricesChanged)
         ) {
             $validated['notes'] = DealMeta::pinQuotedPrice($validated['notes'] ?? null, $nextQuoted, [
                 'orderNo' => (string) $salesTransaction->transaction_no,
@@ -1209,6 +1225,27 @@ class SalesTransactionController extends Controller
         );
     }
 
+    private function readableReply(string $notes): string
+    {
+        $chunks = preg_split("/\n{2,}/", trim($notes)) ?: [];
+        for ($index = count($chunks) - 1; $index >= 0; $index--) {
+            $text = trim((string) (preg_replace('/\s+/', ' ', (string) $chunks[$index]) ?? ''));
+            if ($text === '') {
+                continue;
+            }
+            if (stripos($text, 'Grand total:') !== false || stripos($text, 'A quoted price is ready') !== false) {
+                continue;
+            }
+            if (strlen($text) > 180) {
+                continue;
+            }
+
+            return $text;
+        }
+
+        return '';
+    }
+
     private function notifyCustomerQuotationReply(SalesTransaction $transaction, string $previousSalesNotes): void
     {
         $this->notifyDealConversation($transaction, $previousSalesNotes);
@@ -1232,16 +1269,14 @@ class SalesTransactionController extends Controller
 
         $itemNames = WebDesignMeta::packageItemLine($transaction->items, $transaction->notes)
             ?: TransactionLabelResolver::planLabel($transaction->items, $transaction->transaction_no);
-        $clientNotes = DealMeta::clientNotes($transaction->notes)
-            ?: WebDesignMeta::clientNotes($transaction->notes);
         $isWebDesign = WebDesignQuotation::isWebDesign($transaction);
         $title = $isWebDesign ? 'Sales replied to your quotation' : 'Sales replied to your deal';
-        $body = 'Sales replied to '
+        $reply = $this->readableReply($salesNotes);
+        $body = 'Sales replied on '
             .$transaction->transaction_no
             .($itemNames ? " ({$itemNames})" : '')
-            .($clientNotes !== '' ? '. Your notes: '.$clientNotes : '')
-            .'. Reply: '.$salesNotes
-            .($isWebDesign ? ' You can keep talking about the price until the quotation is approved.' : '');
+            .($reply !== '' ? '. '.$reply : '.')
+            .($isWebDesign ? ' Review the services and total in this quotation.' : '');
 
         CustomerNotification::query()->updateOrCreate(
             [
@@ -1258,16 +1293,17 @@ class SalesTransactionController extends Controller
         );
 
         $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? '')));
+        $who = $actorName !== '' ? $actorName : 'Sales';
         app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
             (int) $transaction->customer_id,
             ['sales_admin', 'admin', 'sales_staff'],
             'deal-reply:'.$transaction->id,
             $isWebDesign ? 'Sales replied to a quotation' : 'Sales replied to a deal',
-            ($actorName !== '' ? $actorName : 'Sales')
+            $who
                 .' replied on '
                 .$transaction->transaction_no
                 .($itemNames ? " ({$itemNames})" : '')
-                .'. Reply: '.$salesNotes,
+                .($reply !== '' ? '. '.$reply : '.'),
             'deal_reply',
             '/public/commerce-admin?tab=orders',
             true,

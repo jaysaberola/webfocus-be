@@ -373,6 +373,9 @@ class WebDesignMeta
                 continue;
             }
             if (is_array($item)) {
+                if (! isset($item['total']) && isset($item['total_price'])) {
+                    $item['total'] = $item['total_price'];
+                }
                 $raw[] = $item;
             }
         }
@@ -387,9 +390,10 @@ class WebDesignMeta
                 continue;
             }
             $included = ! empty($item['included']) || self::isAddonItem($item);
-            $amount = (float) ($item['total'] ?? $item['price'] ?? 0);
-            if ($amount <= 0) {
-                $amount = DealMeta::amountFor($amounts, $name, (string) ($item['detail'] ?? ''));
+            $amount = (float) ($item['total'] ?? $item['total_price'] ?? $item['price'] ?? 0);
+            $mapped = DealMeta::amountFor($amounts, $name, (string) ($item['detail'] ?? ''));
+            if ($mapped > 0) {
+                $amount = $mapped;
             }
             $rows[] = [
                 'label' => $included ? 'Included service' : 'Items',

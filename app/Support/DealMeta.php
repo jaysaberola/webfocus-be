@@ -100,8 +100,7 @@ class DealMeta
             $detail = trim((string) ($item['detail'] ?? ''));
             $name = trim((string) ($item['name'] ?? ''));
             $quoted = self::amountFor($amounts, $detail, $name);
-            $current = (float) ($item['total'] ?? $item['price'] ?? 0);
-            if ($quoted > 0 && $current <= 0) {
+            if ($quoted > 0) {
                 $quantity = max(1.0, (float) ($item['quantity'] ?? 1));
                 $item['unitPrice'] = $quoted;
                 $item['price'] = round($quoted * $quantity, 2);
@@ -400,11 +399,22 @@ class DealMeta
         $meta = self::parse($text);
         $meta['quotedPrice'] = $amount;
         $text = self::replaceMeta($text === '' && $meta === [] ? '[DEAL_META]{}' : $text, $meta);
-        if (abs($current - $amount) < 0.01) {
-            return $text;
+        $summary = self::quoteSummary($amount, $text, $context);
+        if (abs($current - $amount) < 0.01 && empty($context['refreshLines'])) {
+            $thread = self::conversation($text);
+            $latest = $thread === [] ? null : $thread[count($thread) - 1];
+            $latestText = is_array($latest) ? (string) ($latest['text'] ?? '') : '';
+            if (
+                ! is_array($latest)
+                || ($latest['from'] ?? '') !== 'sales'
+                || stripos($latestText, 'Grand total:') === false
+                || trim($latestText) === $summary
+            ) {
+                return $text;
+            }
         }
 
-        return self::appendSalesNote($text, self::quoteSummary($amount, $text, $context));
+        return self::replaceLatestQuote($text, $summary);
     }
 
     /**
@@ -545,6 +555,53 @@ class DealMeta
     public static function appendSalesNote(?string $notes, string $message, ?array $file = null): string
     {
         return self::appendMessage($notes, 'sales', $message, $file);
+    }
+
+    private static function replaceLatestQuote(string $notes, string $summary): string
+    {
+        $thread = self::conversation($notes);
+        $replaced = false;
+        for ($index = count($thread) - 1; $index >= 0; $index--) {
+            if (($thread[$index]['from'] ?? '') !== 'sales') {
+                continue;
+            }
+            $existing = (string) ($thread[$index]['text'] ?? '');
+            if (stripos($existing, 'Grand total:') === false || stripos($existing, 'A quoted price is ready') === false) {
+                continue;
+            }
+            $thread[$index]['text'] = $summary;
+            $thread[$index]['at'] = date('c');
+            $replaced = true;
+            break;
+        }
+        if (! $replaced) {
+            return self::appendSalesNote($notes, $summary);
+        }
+
+        $client = [];
+        $sales = [];
+        foreach ($thread as $row) {
+            if (($row['from'] ?? '') === 'sales') {
+                $sales[] = $row['text'];
+            } else {
+                $client[] = $row['text'];
+            }
+        }
+        $clientText = implode("\n\n", $client);
+        $salesText = implode("\n\n", $sales);
+        $updated = self::withConversation($notes, $clientText, $salesText);
+        $meta = self::parse($updated);
+        $meta['conversation'] = $thread;
+        $updated = self::replaceMeta($updated, $meta);
+        if (
+            WebDesignMeta::parse($updated) !== []
+            || WebDesignMeta::clientNotes($notes) !== ''
+            || WebDesignMeta::salesNotes($notes) !== ''
+        ) {
+            $updated = WebDesignMeta::withConversation($updated, $clientText, $salesText);
+        }
+
+        return $updated;
     }
 
     /**

@@ -90,4 +90,37 @@ class DealMetaLineAdjustmentsTest extends TestCase
         $this->assertSame(1500.0, (float) $priced['items'][1]['price']);
         $this->assertSame(1500.0, $priced['subtotal']);
     }
+
+    public function test_replaces_an_existing_line_amount_when_the_deal_amount_changes(): void
+    {
+        $row = new SalesTransaction();
+        $row->setAttribute('discount_total', 100);
+        $row->setAttribute('tax_total', 0);
+        $row->setAttribute(
+            'notes',
+            '[DEAL_META]{"dealAmounts":{"High-Concurrency E-Commerce Plus":"1000","Dashboard":"111"},"dealDiscounts":{"High-Concurrency E-Commerce Plus":"100"}}'
+        );
+
+        $priced = DealMeta::applyLineAdjustments([
+            [
+                'name' => 'High-Concurrency E-Commerce Plus',
+                'detail' => 'High-Concurrency E-Commerce Plus',
+                'price' => 25000,
+                'total' => 25000,
+            ],
+            [
+                'name' => 'Dashboard',
+                'detail' => 'Included service',
+                'price' => 0,
+                'total' => 0,
+                'included' => true,
+            ],
+        ], $row);
+
+        $this->assertSame(1000.0, (float) $priced['items'][0]['price']);
+        $this->assertSame(111.0, (float) $priced['items'][1]['price']);
+        $this->assertSame(100.0, (float) $priced['items'][0]['discount']);
+        $this->assertSame(1111.0, $priced['subtotal']);
+        $this->assertSame(100.0, $priced['discountTotal']);
+    }
 }
