@@ -66,6 +66,7 @@ class User extends Authenticatable implements AuditableContract
         'sec_dti_registration',
         'valid_id_signatories',
         'gen_info_sheet',
+        'contact_information',
     ];
 
     protected $hidden = [
@@ -78,6 +79,7 @@ class User extends Authenticatable implements AuditableContract
         'email_verified_at' => 'datetime',
         'birth_date'        => 'date',
         'is_active'         => 'boolean',
+        'contact_information' => 'array',
     ];
 
     public static function isPlaceholderLastName(?string $lname): bool

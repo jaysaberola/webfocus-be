@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
+use App\Models\SalesTransaction;
 use App\Models\User;
 use App\Services\CustomerPortalProvisioner;
 use App\Support\ServiceCatalogLabelResolver;
@@ -318,9 +319,16 @@ class CustomerController extends Controller
         abort_unless($customer->hasRole(self::ROLE), 404);
         $customer->loadMissing('owner');
 
+        $customerTransactions = SalesTransaction::query()
+            ->where('customer_id', $customer->id)
+            ->orderByDesc('created_at')
+            ->get(['id', 'transaction_no', 'grand_total', 'payment_status', 'order_status', 'transacted_at', 'created_at']);
+
+        $transactionIds = $customerTransactions->pluck('id');
+
         $activityLogs = DB::table('audits')
             ->leftJoin('users as actors', 'audits.user_id', '=', 'actors.id')
-            ->where(function ($query) use ($customer) {
+            ->where(function ($query) use ($customer, $transactionIds) {
                 $query->where(function ($auditable) use ($customer) {
                     $auditable
                         ->where('audits.auditable_id', $customer->id)
@@ -329,7 +337,19 @@ class CustomerController extends Controller
                                 ->orWhere('audits.auditable_type', 'App\\Models\\User')
                                 ->orWhere('audits.auditable_type', 'like', '%User');
                         });
-                })->orWhere('audits.user_id', $customer->id);
+                });
+
+                if ($transactionIds->isNotEmpty()) {
+                    $query->orWhere(function ($invoiceAudits) use ($transactionIds) {
+                        $invoiceAudits
+                            ->whereIn('audits.auditable_id', $transactionIds)
+                            ->where(function ($type) {
+                                $type->where('audits.auditable_type', SalesTransaction::class)
+                                    ->orWhere('audits.auditable_type', 'App\\Models\\SalesTransaction')
+                                    ->orWhere('audits.auditable_type', 'like', '%SalesTransaction');
+                            });
+                    });
+                }
             })
             ->orderByDesc('audits.created_at')
             ->select([
@@ -348,19 +368,37 @@ class CustomerController extends Controller
                 'actors.email as actor_email',
             ])
             ->get()
-            ->map(function ($audit) {
+            ->map(function ($audit) use ($customerTransactions) {
                 $actorName = trim(($audit->actor_fname ?? '') . ' ' . ($audit->actor_lname ?? ''));
                 if ($actorName === '') {
                     $actorName = $audit->actor_email;
                 }
 
+                $auditableType = class_basename((string) $audit->auditable_type);
+                $oldValues = json_decode($audit->old_values, true) ?: [];
+                $newValues = json_decode($audit->new_values, true) ?: [];
+                $transactionNo = null;
+                $invoiceId = null;
+
+                if (strcasecmp($auditableType, 'SalesTransaction') === 0) {
+                    $transaction = $customerTransactions->firstWhere('id', (int) $audit->auditable_id);
+                    $transactionNo = $transaction?->transaction_no
+                        ?? ($newValues['transaction_no'] ?? null)
+                        ?? ($oldValues['transaction_no'] ?? null);
+                    if (filled($transactionNo)) {
+                        $invoiceId = 'INV-' . $transactionNo;
+                    }
+                }
+
                 return [
                     'id' => $audit->id,
                     'event' => $audit->event,
-                    'auditable_type' => class_basename((string) $audit->auditable_type),
+                    'auditable_type' => $auditableType,
                     'auditable_id' => $audit->auditable_id,
-                    'old_values' => json_decode($audit->old_values, true) ?: [],
-                    'new_values' => json_decode($audit->new_values, true) ?: [],
+                    'old_values' => $oldValues,
+                    'new_values' => $newValues,
+                    'transaction_no' => $transactionNo,
+                    'invoice_id' => $invoiceId,
                     'ip_address' => $audit->ip_address,
                     'user_agent' => $audit->user_agent,
                     'user_id' => $audit->user_id,
@@ -403,6 +441,16 @@ class CustomerController extends Controller
                         ?: ($customer->owner->email ?? null))
                     : null,
                 'audits' => $activityLogs,
+                'invoices' => $customerTransactions->map(fn (SalesTransaction $row) => [
+                    'id' => $row->id,
+                    'transaction_no' => $row->transaction_no,
+                    'invoice_id' => 'INV-' . $row->transaction_no,
+                    'grand_total' => $row->grand_total,
+                    'payment_status' => $row->payment_status,
+                    'order_status' => $row->order_status,
+                    'transacted_at' => optional($row->transacted_at)->toIso8601String(),
+                    'created_at' => optional($row->created_at)->toIso8601String(),
+                ])->values(),
             ], $this->clientProfilePayload($customer)),
         ]);
     }
@@ -526,6 +574,13 @@ class CustomerController extends Controller
             $text = trim((string) $request->input('mobile'));
             $request->merge(['mobile' => $text === '' ? null : $text]);
         }
+
+        if ($request->has('contact_information') && is_string($request->input('contact_information'))) {
+            $decoded = json_decode((string) $request->input('contact_information'), true);
+            $request->merge([
+                'contact_information' => is_array($decoded) ? $decoded : null,
+            ]);
+        }
     }
 
     private function syncCustomerServices(User $customer, array $services, array $addons): void
@@ -629,6 +684,7 @@ class CustomerController extends Controller
             'sec_dti_registration' => ['nullable', 'file', 'max:5120'],
             'valid_id_signatories' => ['nullable', 'file', 'max:5120'],
             'gen_info_sheet' => ['nullable', 'file', 'max:5120'],
+            'contact_information' => ['nullable', 'array'],
         ];
     }
 
@@ -692,6 +748,7 @@ class CustomerController extends Controller
             'shipping_region',
             'shipping_zip',
             'shipping_country',
+            'contact_information',
         ];
 
         $attrs = [];
@@ -709,7 +766,74 @@ class CustomerController extends Controller
             $attrs['exchange_rate'] = 1;
         }
 
+        if (array_key_exists('contact_information', $attrs)) {
+            $attrs['contact_information'] = $this->sanitizeContactInformation($attrs['contact_information']);
+        }
+
         return $attrs;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function sanitizeContactInformation(mixed $value): array
+    {
+        $source = is_array($value) ? $value : [];
+        $block = function (mixed $row): array {
+            $row = is_array($row) ? $row : [];
+            $text = fn (string $key, int $limit = 255) => mb_substr(trim((string) ($row[$key] ?? '')), 0, $limit);
+
+            return [
+                'enabled' => filter_var($row['enabled'] ?? false, FILTER_VALIDATE_BOOLEAN),
+                'person' => $text('person'),
+                'designation' => $text('designation'),
+                'email' => $text('email'),
+                'phone' => $text('phone', 50),
+                'mobile' => $text('mobile', 50),
+                'attention' => $text('attention'),
+                'instructions' => $text('instructions', 2000),
+                'address' => $text('address', 2000),
+                'other' => $text('other', 2000),
+            ];
+        };
+        $signatories = [];
+        foreach (array_slice(is_array($source['signatories'] ?? null) ? $source['signatories'] : [], 0, 20) as $row) {
+            $row = is_array($row) ? $row : [];
+            $text = fn (string $key, int $limit = 255) => mb_substr(trim((string) ($row[$key] ?? '')), 0, $limit);
+            $signatories[] = [
+                'person' => $text('person'),
+                'designation' => $text('designation'),
+                'email' => $text('email'),
+                'phone' => $text('phone', 50),
+                'mobile' => $text('mobile', 50),
+                'other' => $text('other', 2000),
+            ];
+        }
+        if ($signatories === []) {
+            $signatories = [[
+                'person' => '',
+                'designation' => '',
+                'email' => '',
+                'phone' => '',
+                'mobile' => '',
+                'other' => '',
+            ], [
+                'person' => '',
+                'designation' => '',
+                'email' => '',
+                'phone' => '',
+                'mobile' => '',
+                'other' => '',
+            ]];
+        }
+
+        return [
+            'billing' => $block($source['billing'] ?? null),
+            'collection' => $block($source['collection'] ?? null),
+            'technical' => $block($source['technical'] ?? null),
+            'signatoriesEnabled' => filter_var($source['signatoriesEnabled'] ?? false, FILTER_VALIDATE_BOOLEAN),
+            'signatories' => $signatories,
+        ];
     }
 
     /**
@@ -743,6 +867,7 @@ class CustomerController extends Controller
             'sec_dti_registration' => $customer->sec_dti_registration,
             'valid_id_signatories' => $customer->valid_id_signatories,
             'gen_info_sheet' => $customer->gen_info_sheet,
+            'contact_information' => $customer->contact_information,
             'bir_certificate_url' => StorageUrl::publicAsset($customer->bir_certificate),
             'business_permit_url' => StorageUrl::publicAsset($customer->business_permit),
             'sec_dti_registration_url' => StorageUrl::publicAsset($customer->sec_dti_registration),
