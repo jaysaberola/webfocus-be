@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ContactInquiry;
 use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
 use App\Models\ProvisioningAction;
@@ -727,6 +728,7 @@ class CommerceAdminController extends Controller
         $proofIds = [];
         $profileIds = [];
         $ticketIds = [];
+        $inquiryIds = [];
         $orderIds = [];
         $actionIds = [];
         foreach ($inboxRows as $row) {
@@ -737,6 +739,8 @@ class CommerceAdminController extends Controller
                 $profileIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:support-ticket:(\d+)$/', $key, $m)) {
                 $ticketIds[] = (int) $m[1];
+            } elseif (preg_match('/^admin:contact-inquiry:(\d+)$/', $key, $m)) {
+                $inquiryIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $key, $m)) {
                 $orderIds[] = (int) $m[1];
             } elseif (preg_match('/^admin:webdesign-(?:quotation|assigned|signed|priced):(\d+)$/', $key, $m)) {
@@ -769,6 +773,12 @@ class CommerceAdminController extends Controller
                 ->whereIn('id', $ticketIds)
                 ->get()
                 ->keyBy('id');
+        $inquiries = $inquiryIds === []
+            ? collect()
+            : ContactInquiry::query()
+                ->whereIn('id', $inquiryIds)
+                ->get()
+                ->keyBy('id');
         $orders = $orderIds === []
             ? collect()
             : SalesTransaction::query()
@@ -790,7 +800,7 @@ class CommerceAdminController extends Controller
                 ->keyBy('id');
 
         $inboxAlerts = $inboxRows
-            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets, $orders, $provisioningActions))
+            ->map(fn (CustomerNotification $row) => $this->mapStaffInboxAlert($row, $proofs, $profiles, $tickets, $inquiries, $orders, $provisioningActions))
             ->filter(function (array $row) use ($canSeeQuotations) {
                 if (($row['kind'] ?? '') === 'web_design_quotation') {
                     return $canSeeQuotations;
@@ -1263,6 +1273,9 @@ class CommerceAdminController extends Controller
         if (str_contains($url, 'tab=helpdesk') || $kind === 'support_ticket') {
             return 'Open Helpdesk';
         }
+        if (str_contains($url, 'tab=inquiries') || $kind === 'contact_inquiry') {
+            return 'Open Inquiries';
+        }
         if (str_contains($url, 'tab=invoices') || str_contains($url, 'tab=billing') || $kind === 'billing') {
             return 'Open Billing';
         }
@@ -1364,13 +1377,14 @@ class CommerceAdminController extends Controller
         return '₱' . number_format((float) $amount, 2);
     }
 
-    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets, $orders, $provisioningActions = null): array
+    private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets, $inquiries, $orders, $provisioningActions = null): array
     {
         $referenceKey = (string) $row->reference_key;
         $kind = match (true) {
             str_starts_with($referenceKey, 'admin:payment-proof:') => 'payment_proof',
             str_starts_with($referenceKey, 'admin:profile-change:') => 'profile_change',
             str_starts_with($referenceKey, 'admin:support-ticket:') => 'support_ticket',
+            str_starts_with($referenceKey, 'admin:contact-inquiry:') => 'contact_inquiry',
             str_starts_with($referenceKey, 'admin:webdesign-quotation:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-signed:') => 'web_design_quotation',
             str_starts_with($referenceKey, 'admin:webdesign-assigned:') => 'web_design_quotation',
@@ -1386,6 +1400,7 @@ class CommerceAdminController extends Controller
             'payment_proof' => 'Pending Review',
             'profile_change' => 'Pending Review',
             'support_ticket' => 'Open',
+            'contact_inquiry' => 'New',
             'web_design_quotation' => 'Pending Quotation',
             'provisioning_action' => 'Assigned',
             'deal_reply' => 'Deal Reply',
@@ -1496,6 +1511,29 @@ class CommerceAdminController extends Controller
                     'Status' => $ticket->status,
                     'Submitted' => $this->formatAppDateTime($ticket->created_at),
                     'Message' => $ticket->message,
+                ]);
+            }
+        } elseif (preg_match('/^admin:contact-inquiry:(\d+)$/', $referenceKey, $match)) {
+            $inquiry = $inquiries->get((int) $match[1]);
+            if ($inquiry) {
+                $referenceId = (int) $inquiry->id;
+                $fromName = trim($inquiry->first_name . ' ' . $inquiry->last_name) ?: 'Contact Us visitor';
+                $fromEmail = $inquiry->email;
+                $status = ucfirst(str_replace('_', ' ', (string) $inquiry->status));
+                $intro = "{$fromName} sent a Contact Us inquiry that needs a response.";
+                $preferred = $inquiry->preferred_services;
+                $preferredLabel = is_array($preferred) && $preferred !== []
+                    ? implode(', ', $preferred)
+                    : null;
+                $details = $this->inboxDetails([
+                    'Name' => $fromName,
+                    'Email' => $fromEmail,
+                    'Phone' => $inquiry->contact_number,
+                    'Inquiry Type' => $inquiry->inquiry_type,
+                    'Status' => $status,
+                    'Preferred Services' => $preferredLabel,
+                    'Submitted' => $this->formatAppDateTime($inquiry->created_at),
+                    'Message' => $inquiry->message,
                 ]);
             }
         } elseif (preg_match('/^admin:order-cancelled:(\d+)$/', $referenceKey, $match)) {
@@ -1630,6 +1668,9 @@ class CommerceAdminController extends Controller
         $actionUrl = $row->action_url ?: match ($kind) {
             'payment_proof', 'profile_change', 'provisioning_action' => '/public/commerce-admin?tab=approvals',
             'support_ticket' => '/public/commerce-admin?tab=helpdesk',
+            'contact_inquiry' => $referenceId
+                ? '/public/commerce-admin?tab=inquiries&inquiry=' . $referenceId
+                : '/public/commerce-admin?tab=inquiries',
             'billing' => '/public/commerce-admin?tab=billing',
             default => '/public/commerce-admin?tab=orders',
         };
@@ -1772,6 +1813,7 @@ class CommerceAdminController extends Controller
                         'payment_proof',
                         'profile_change',
                         'support_ticket',
+                        'contact_inquiry',
                         'deal_reply',
                     ]);
             })

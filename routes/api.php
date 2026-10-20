@@ -33,6 +33,8 @@ use App\Http\Controllers\Api\PublicFreshchatController;
 use App\Http\Controllers\Api\PermissionMatrixController;
 use App\Http\Controllers\Api\CustomerPortalController;
 use App\Http\Controllers\Api\CommerceAdminController;
+use App\Http\Controllers\Api\CrmLeadController;
+use App\Http\Controllers\Api\ContactInquiryController;
 use App\Http\Controllers\Api\ProvisioningController;
 use App\Http\Controllers\Api\DomainLookupController;
 use App\Http\Controllers\Api\PaynamicsPaymentController;
@@ -104,6 +106,14 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::patch('/sales-transactions/{salesTransaction}/assign', [CommerceAdminController::class, 'assignSalesTransaction']);
         Route::patch('/customers/{customer}/assign-owner', [CommerceAdminController::class, 'assignCustomerOwner']);
         Route::get('/customers/{customer}/next-rotating-owner', [CommerceAdminController::class, 'nextRotatingClientOwner']);
+        Route::get('/leads', [CrmLeadController::class, 'index']);
+        Route::post('/leads', [CrmLeadController::class, 'store']);
+        Route::get('/leads/{crmLead}', [CrmLeadController::class, 'show']);
+        Route::put('/leads/{crmLead}', [CrmLeadController::class, 'update']);
+        Route::patch('/leads/{crmLead}', [CrmLeadController::class, 'update']);
+        Route::get('/inquiries', [ContactInquiryController::class, 'index']);
+        Route::get('/inquiries/{contactInquiry}', [ContactInquiryController::class, 'show']);
+        Route::patch('/inquiries/{contactInquiry}', [ContactInquiryController::class, 'update']);
     });
 
     // Commerce data shared by CMS modules and Commerce Control Center

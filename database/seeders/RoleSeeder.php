@@ -64,8 +64,11 @@ class RoleSeeder extends Seeder
 
         $commerceCustomerCare = [
             'commerce_dashboard.view',
-            'sales_transactions.view',
-            'sales_transactions.manage',
+            'customers.manage',
+            'commerce_leads.view',
+            'commerce_leads.manage',
+            'commerce_inquiries.view',
+            'commerce_inquiries.manage',
             'commerce_notifications.view',
             'commerce_notifications.manage',
             'commerce_helpdesk.view',

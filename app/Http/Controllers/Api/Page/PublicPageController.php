@@ -11,6 +11,8 @@ use App\Models\Article;
 use Illuminate\Http\Request;
 use App\Models\ArticleCategory;
 use App\Mail\ContactMessageMail;
+use App\Models\ContactInquiry;
+use App\Services\CommerceStaffNotifier;
 use App\Http\Controllers\Controller;
 use App\Support\RecaptchaVerifier;
 use App\Support\PhMobile;
@@ -297,8 +299,35 @@ class PublicPageController extends Controller
         unset($data['recaptcha_token']);
         $data['contact_number'] = PhMobile::normalize($data['contact_number']) ?? $data['contact_number'];
 
-        Mail::to(config('mail.from.address'))
-            ->send(new ContactMessageMail($data));
+        $inquiry = ContactInquiry::create([
+            'inquiry_type' => $data['inquiry_type'],
+            'first_name' => $data['first_name'],
+            'last_name' => $data['last_name'],
+            'email' => $data['email'],
+            'contact_number' => $data['contact_number'],
+            'message' => $data['message'],
+            'preferred_services' => $data['preferred_services'] ?? null,
+            'status' => 'new',
+        ]);
+
+        $senderName = trim($data['first_name'] . ' ' . $data['last_name']) ?: $data['email'];
+        app(CommerceStaffNotifier::class)->notifyOwnerAndRoles(
+            null,
+            ['customer_care'],
+            'admin:contact-inquiry:' . $inquiry->id,
+            'New Contact Us Inquiry',
+            "{$senderName} sent a {$data['inquiry_type']} message via Contact Us.",
+            'contact_inquiry',
+            '/public/commerce-admin?tab=inquiries&inquiry=' . $inquiry->id,
+            false,
+        );
+
+        try {
+            Mail::to(config('mail.from.address'))
+                ->send(new ContactMessageMail($data));
+        } catch (\Throwable) {
+            // Inquiry is stored for Customer Care even if outbound mail fails.
+        }
 
         return response()->json([
             'message' => 'Message sent successfully'

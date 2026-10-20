@@ -95,6 +95,14 @@ class PermissionSeeder extends Seeder
             'inventory.manage',
             'coupons.manage',
 
+            // Commerce — Leads (Customer Care)
+            'commerce_leads.view',
+            'commerce_leads.manage',
+
+            // Commerce — Contact Us inquiries (Customer Care)
+            'commerce_inquiries.view',
+            'commerce_inquiries.manage',
+
             // Commerce — Notifications
             'commerce_notifications.view',
             'commerce_notifications.manage',
