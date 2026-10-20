@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\CustomerService;
 use App\Models\SalesTransaction;
 use App\Models\User;
+use App\Services\ClientOwnerRotator;
 use App\Services\CustomerPortalProvisioner;
 use App\Support\ServiceCatalogLabelResolver;
 use App\Support\StorageUrl;
@@ -489,6 +490,8 @@ class CustomerController extends Controller
 
         $filePaths = $this->storeClientDocuments($request, $customer);
 
+        $previousOwnerId = $customer->owner_id;
+
         $customer->update(array_merge(
             [
                 'fname' => $fname,
@@ -513,6 +516,13 @@ class CustomerController extends Controller
         ));
 
         $customer->syncRoles([self::ROLE]);
+
+        if (
+            array_key_exists('owner_id', $validated)
+            && (int) ($customer->owner_id ?? 0) !== (int) ($previousOwnerId ?? 0)
+        ) {
+            app(ClientOwnerRotator::class)->syncDealsForCustomer($customer);
+        }
 
         if ($request->has('services') || $request->has('addons')) {
             $this->syncCustomerServices(

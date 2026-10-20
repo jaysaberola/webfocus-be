@@ -215,6 +215,7 @@ class CommerceAdminController extends Controller
         }
 
         $customer->update(['owner_id' => $ownerId]);
+        app(ClientOwnerRotator::class)->syncDealsForCustomer($customer);
         $fresh = $customer->fresh()->load(['owner:id,fname,lname,email']);
         $owner = $fresh->owner;
         $ownerName = $owner

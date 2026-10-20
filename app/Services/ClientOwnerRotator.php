@@ -36,6 +36,23 @@ class ClientOwnerRotator
         return $owner;
     }
 
+    /**
+     * When CRM updates a customer's owner, align all of their deals/invoices.
+     */
+    public function syncDealsForCustomer(User $customer): void
+    {
+        $customerId = (int) $customer->id;
+        if ($customerId <= 0) {
+            return;
+        }
+
+        $ownerId = $customer->owner_id ? (int) $customer->owner_id : null;
+
+        SalesTransaction::query()
+            ->where('customer_id', $customerId)
+            ->update(['client_owner_id' => $ownerId]);
+    }
+
     public function nextOwner(int $customerId): ?User
     {
         return $this->existingCustomerOwner($customerId) ?: $this->nextSalesStaff();
