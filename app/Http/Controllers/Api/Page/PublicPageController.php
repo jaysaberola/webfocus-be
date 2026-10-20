@@ -306,6 +306,11 @@ class PublicPageController extends Controller
             'email' => $data['email'],
             'contact_number' => $data['contact_number'],
             'message' => $data['message'],
+            'conversation' => [[
+                'from' => 'client',
+                'text' => $data['message'],
+                'at' => now()->toIso8601String(),
+            ]],
             'preferred_services' => $data['preferred_services'] ?? null,
             'status' => 'new',
         ]);

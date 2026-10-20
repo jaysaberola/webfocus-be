@@ -3,9 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Mail\ContactInquiryReplyMail;
 use App\Models\ContactInquiry;
 use App\Models\CustomerNotification;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
 
 class ContactInquiryController extends Controller
 {
@@ -73,6 +75,54 @@ class ContactInquiryController extends Controller
         ]);
     }
 
+    public function reply(Request $request, ContactInquiry $contactInquiry)
+    {
+        $this->assertCanManage($request);
+
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:2000'],
+        ]);
+
+        $thread = $this->normalizeConversation($contactInquiry);
+        $thread[] = [
+            'from' => 'sales',
+            'text' => trim($validated['message']),
+            'at' => now()->toIso8601String(),
+        ];
+
+        $updates = ['conversation' => $thread];
+        if (in_array($contactInquiry->status, ['new', 'in_review'], true)) {
+            $updates['status'] = 'responded';
+        }
+
+        $contactInquiry->update($updates);
+        $contactInquiry->refresh();
+
+        $replyText = trim($validated['message']);
+        $customerEmail = trim((string) $contactInquiry->email);
+        $emailed = false;
+
+        if ($customerEmail !== '' && filter_var($customerEmail, FILTER_VALIDATE_EMAIL)) {
+            try {
+                Mail::to($customerEmail)->send(new ContactInquiryReplyMail($contactInquiry, $replyText));
+                $emailed = true;
+            } catch (\Throwable) {
+                // Conversation is saved even if outbound mail fails.
+            }
+        }
+
+        return response()->json([
+            'message' => $emailed
+                ? 'Reply saved and emailed to ' . $customerEmail . '.'
+                : 'Reply saved. Could not send email — check the customer email on this inquiry.',
+            'data' => $this->mapInquiry($contactInquiry),
+            'meta' => [
+                'emailed' => $emailed,
+                'recipient' => $emailed ? $customerEmail : null,
+            ],
+        ]);
+    }
+
     private function mapInquiry(ContactInquiry $inquiry): array
     {
         return [
@@ -83,12 +133,57 @@ class ContactInquiryController extends Controller
             'email' => $inquiry->email,
             'contact_number' => $inquiry->contact_number,
             'message' => $inquiry->message,
+            'conversation' => $this->normalizeConversation($inquiry),
             'preferred_services' => $inquiry->preferred_services ?? [],
             'status' => $inquiry->status,
             'read_at' => optional($inquiry->read_at)->toIso8601String(),
             'created_at' => optional($inquiry->created_at)->toIso8601String(),
             'updated_at' => optional($inquiry->updated_at)->toIso8601String(),
         ];
+    }
+
+    /**
+     * @return list<array{from: string, text: string, at?: string|null}>
+     */
+    private function normalizeConversation(ContactInquiry $inquiry): array
+    {
+        $raw = $inquiry->conversation;
+        if (is_array($raw) && $raw !== []) {
+            $rows = [];
+            foreach ($raw as $row) {
+                if (! is_array($row)) {
+                    continue;
+                }
+                $text = trim((string) ($row['text'] ?? ''));
+                if ($text === '') {
+                    continue;
+                }
+                $from = ($row['from'] ?? '') === 'sales' ? 'sales' : 'client';
+                $entry = [
+                    'from' => $from,
+                    'text' => $text,
+                ];
+                if (! empty($row['at'])) {
+                    $entry['at'] = (string) $row['at'];
+                }
+                $rows[] = $entry;
+            }
+
+            if ($rows !== []) {
+                return $rows;
+            }
+        }
+
+        $text = trim((string) $inquiry->message);
+        if ($text === '') {
+            return [];
+        }
+
+        return [[
+            'from' => 'client',
+            'text' => $text,
+            'at' => optional($inquiry->created_at)->toIso8601String(),
+        ]];
     }
 
     private function assertCanView(Request $request): void

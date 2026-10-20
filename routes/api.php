@@ -114,6 +114,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/inquiries', [ContactInquiryController::class, 'index']);
         Route::get('/inquiries/{contactInquiry}', [ContactInquiryController::class, 'show']);
         Route::patch('/inquiries/{contactInquiry}', [ContactInquiryController::class, 'update']);
+        Route::post('/inquiries/{contactInquiry}/reply', [ContactInquiryController::class, 'reply']);
     });
 
     // Commerce data shared by CMS modules and Commerce Control Center

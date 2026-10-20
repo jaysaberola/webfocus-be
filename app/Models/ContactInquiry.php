@@ -13,6 +13,7 @@ class ContactInquiry extends Model
         'email',
         'contact_number',
         'message',
+        'conversation',
         'preferred_services',
         'status',
         'read_at',
@@ -20,6 +21,7 @@ class ContactInquiry extends Model
 
     protected $casts = [
         'preferred_services' => 'array',
+        'conversation' => 'array',
         'read_at' => 'datetime',
     ];
 }
