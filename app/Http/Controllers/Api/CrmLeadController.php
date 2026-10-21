@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\CrmLead;
+use App\Models\CustomerNotification;
 use App\Models\User;
+use App\Services\ClientOwnerRotator;
 use Illuminate\Http\Request;
 
 class CrmLeadController extends Controller
@@ -40,9 +42,12 @@ class CrmLeadController extends Controller
         $staff = $request->user();
 
         $lead = CrmLead::create(array_merge($validated, [
-            'lead_owner_id' => $validated['lead_owner_id'] ?? $staff?->id,
+            'lead_owner_id' => $validated['lead_owner_id'] ?? null,
             'created_by_id' => $staff?->id,
+            'encoded_by' => $validated['encoded_by'] ?? $this->displayUserName($staff),
         ]));
+
+        $this->notifyLeadAssigneeIfNeeded($lead->fresh(['leadOwner']), $staff, null);
 
         return response()->json([
             'message' => 'Lead created successfully.',
@@ -63,8 +68,15 @@ class CrmLeadController extends Controller
     {
         $this->assertCanManage($request);
         $validated = $this->validatedPayload($request, false);
+        $previousOwnerId = $crmLead->lead_owner_id;
 
         $crmLead->update($validated);
+
+        $this->notifyLeadAssigneeIfNeeded(
+            $crmLead->fresh(['leadOwner']),
+            $request->user(),
+            $previousOwnerId,
+        );
 
         return response()->json([
             'message' => 'Lead updated successfully.',
@@ -101,7 +113,25 @@ class CrmLeadController extends Controller
             'remarks' => ['nullable', 'string'],
         ];
 
-        return $request->validate($rules);
+        $validated = $request->validate($rules);
+        $this->assertValidLeadAssignee($validated['lead_owner_id'] ?? null);
+
+        return $validated;
+    }
+
+    private function assertValidLeadAssignee(?int $userId): void
+    {
+        if (! $userId) {
+            return;
+        }
+
+        $assignee = User::query()->with('roles')->find($userId);
+        abort_unless($assignee, 422, 'Selected assignee was not found.');
+        abort_unless(
+            app(ClientOwnerRotator::class)->isLeadSalesAssignee($assignee),
+            422,
+            'Lead must be assigned to an active Sales Staff or Sales Admin account.',
+        );
     }
 
     private function mapLead(CrmLead $lead): array
@@ -111,6 +141,7 @@ class CrmLeadController extends Controller
             'lead_owner_id' => $lead->lead_owner_id,
             'lead_owner' => $this->mapUser($lead->leadOwner),
             'created_by_id' => $lead->created_by_id,
+            'created_by' => $this->mapUser($lead->createdBy),
             'encoded_by' => $lead->encoded_by,
             'lead_source' => $lead->lead_source,
             'lead_status' => $lead->lead_status,
@@ -164,5 +195,52 @@ class CrmLeadController extends Controller
     private function assertCanManage(Request $request): void
     {
         abort_unless($request->user()?->can('commerce_leads.manage'), 403);
+    }
+
+    private function notifyLeadAssigneeIfNeeded(CrmLead $lead, ?User $actor, ?int $previousOwnerId): void
+    {
+        $assigneeId = $lead->lead_owner_id ? (int) $lead->lead_owner_id : null;
+        if (! $assigneeId) {
+            return;
+        }
+
+        if ($previousOwnerId !== null && (int) $previousOwnerId === $assigneeId) {
+            return;
+        }
+
+        $assignee = $lead->leadOwner;
+        if (! $assignee || ! $assignee->is_active) {
+            return;
+        }
+
+        $actorName = $this->displayUserName($actor);
+        $company = trim((string) ($lead->company ?: 'Lead'));
+        $contact = trim(trim((string) ($lead->first_name ?? '')) . ' ' . trim((string) ($lead->last_name ?? '')));
+        $contactLabel = $contact !== '' ? " ({$contact})" : '';
+
+        CustomerNotification::query()->updateOrCreate(
+            [
+                'customer_id' => $assigneeId,
+                'reference_key' => 'admin:lead-assigned:' . $lead->id,
+            ],
+            [
+                'title' => 'Lead assigned to you',
+                'body' => "{$actorName} assigned lead {$company}{$contactLabel} to you. Open Leads to review and follow up.",
+                'type' => 'crm_lead',
+                'action_url' => '/public/commerce-admin?tab=leads',
+                'read_at' => null,
+            ]
+        );
+    }
+
+    private function displayUserName(?User $user): string
+    {
+        if (! $user) {
+            return 'A team member';
+        }
+
+        $name = trim(($user->fname ?? '') . ' ' . ($user->lname ?? ''));
+
+        return $name !== '' ? $name : (string) ($user->email ?: 'A team member');
     }
 }

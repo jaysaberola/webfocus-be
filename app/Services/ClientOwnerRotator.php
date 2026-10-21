@@ -136,6 +136,88 @@ class ClientOwnerRotator
     }
 
     /**
+     * @return Collection<int, string>
+     */
+    public function salesAssigneeEmails(): Collection
+    {
+        return collect(config('commerce.sales_assignees', []))
+            ->map(function ($row) {
+                if (is_string($row)) {
+                    return strtolower(trim($row));
+                }
+
+                return strtolower(trim((string) ($row['email'] ?? '')));
+            })
+            ->merge(collect(config('commerce.rotating_sales_staff', []))->map(
+                fn ($email) => strtolower(trim((string) $email))
+            ))
+            ->filter()
+            ->unique()
+            ->values();
+    }
+
+    public function isLeadSalesAssignee(?User $user): bool
+    {
+        if (! $user || ! $user->is_active || $user->hasRole('customer')) {
+            return false;
+        }
+
+        if ($user->hasAnyRole(['sales_staff', 'sales_admin'])) {
+            return true;
+        }
+
+        $email = strtolower(trim((string) $user->email));
+
+        return $email !== '' && $this->salesAssigneeEmails()->contains($email);
+    }
+
+    /**
+     * Every active Sales Staff / Sales Admin (and configured sales team) for lead assignment.
+     *
+     * @return Collection<int, User>
+     */
+    public function assignableSalesUsers(): Collection
+    {
+        $emails = $this->salesAssigneeEmails();
+
+        $users = User::query()
+            ->with('roles')
+            ->where('is_active', true)
+            ->whereDoesntHave('roles', function ($query) {
+                $query->where('name', 'customer');
+            })
+            ->where(function ($query) use ($emails) {
+                $query->whereHas('roles', function ($roleQuery) {
+                    $roleQuery->whereIn('name', ['sales_staff', 'sales_admin']);
+                });
+
+                if ($emails->isNotEmpty()) {
+                    $query->orWhere(function ($emailQuery) use ($emails) {
+                        foreach ($emails as $email) {
+                            $emailQuery->orWhereRaw('LOWER(email) = ?', [$email]);
+                        }
+                    });
+                }
+            })
+            ->get();
+
+        return $users
+            ->unique('id')
+            ->sortBy(function (User $user) {
+                $label = strtolower(trim($user->full_name ?: (string) $user->email));
+                if ($user->hasRole('sales_admin')) {
+                    return '0-' . $label;
+                }
+                if ($user->hasRole('sales_staff')) {
+                    return '1-' . $label;
+                }
+
+                return '2-' . $label;
+            })
+            ->values();
+    }
+
+    /**
      * Assign the default Sales Admin / Client Owner when a customer first registers.
      * Skips customers that already have an owner (existing assignments stay unchanged).
      */

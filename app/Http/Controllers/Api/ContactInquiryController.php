@@ -189,10 +189,34 @@ class ContactInquiryController extends Controller
     private function assertCanView(Request $request): void
     {
         abort_unless($request->user()?->can('commerce_inquiries.view'), 403);
+        $this->assertInquiriesStaffRole($request);
     }
 
     private function assertCanManage(Request $request): void
     {
         abort_unless($request->user()?->can('commerce_inquiries.manage'), 403);
+        $this->assertInquiriesStaffRole($request);
+    }
+
+    private function assertInquiriesStaffRole(Request $request): void
+    {
+        $user = $request->user();
+        abort_unless($user, 401);
+
+        if ($user->hasRole('admin')) {
+            return;
+        }
+
+        abort_if(
+            $user->hasAnyRole(['sales_staff', 'sales_admin', 'finance_admin']),
+            403,
+            'Inquiries are only available to Customer Care.',
+        );
+
+        abort_unless(
+            $user->hasRole('customer_care'),
+            403,
+            'Inquiries are only available to Customer Care.',
+        );
     }
 }

@@ -185,5 +185,34 @@ class UserSeeder extends Seeder
 
             $user->assignRole($role);
         }
+
+        foreach (config('commerce.sales_assignees', []) as $person) {
+            if (! is_array($person)) {
+                continue;
+            }
+
+            $email = strtolower(trim((string) ($person['email'] ?? '')));
+            if ($email === '') {
+                continue;
+            }
+
+            $roleName = (string) ($person['sales_role'] ?? 'sales_staff');
+            $role = Role::query()
+                ->where('name', $roleName)
+                ->where('guard_name', 'sanctum')
+                ->first();
+            if (! $role) {
+                continue;
+            }
+
+            $user = User::query()->whereRaw('LOWER(email) = ?', [$email])->first();
+            if (! $user) {
+                continue;
+            }
+
+            if (! $user->hasRole($roleName)) {
+                $user->assignRole($role);
+            }
+        }
     }
 }

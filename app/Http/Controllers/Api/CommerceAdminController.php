@@ -74,39 +74,8 @@ class CommerceAdminController extends Controller
                 ->orderBy('fname')
                 ->orderBy('lname')
                 ->get();
-        } elseif ($request->input('for') === 'sales_staff') {
-            $ownerEmails = collect(config('commerce.rotating_sales_staff', []))
-                ->filter()
-                ->values();
-            if ($ownerEmails->isEmpty()) {
-                $ownerEmails = collect(config('commerce.rotating_client_owners', []))->filter()->values();
-            }
-
-            $records = User::query()
-                ->with('roles')
-                ->where('is_active', true)
-                ->where(function ($query) use ($ownerEmails) {
-                    $query->whereHas('roles', function ($roleQuery) {
-                        $roleQuery->whereIn('name', ['sales_staff', 'sales_admin']);
-                    });
-                    if ($ownerEmails->isNotEmpty()) {
-                        $query->orWhereIn('email', $ownerEmails);
-                    }
-                })
-                ->whereDoesntHave('roles', function ($query) {
-                    $query->where('name', 'customer');
-                })
-                ->get()
-                ->unique('id')
-                ->sortBy(function (User $user) use ($ownerEmails) {
-                    $index = $ownerEmails->search(fn ($email) => strcasecmp((string) $email, (string) $user->email) === 0);
-                    if ($index !== false) {
-                        return $index;
-                    }
-
-                    return 100 + strtolower(trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')));
-                })
-                ->values();
+        } elseif (in_array($request->input('for'), ['sales_staff', 'lead_assignee'], true)) {
+            $records = app(ClientOwnerRotator::class)->assignableSalesUsers();
         } else {
             $records = $users
                 ->orderBy('fname')
@@ -117,7 +86,9 @@ class CommerceAdminController extends Controller
         $payload = $records
             ->map(fn (User $user) => [
                 'id' => $user->id,
-                'name' => trim(($user->fname ?? '') . ' ' . ($user->lname ?? '')) ?: ($user->email ?? 'User'),
+                'name' => trim((string) ($user->full_name ?: ''))
+                    ?: trim(($user->fname ?? '') . ' ' . ($user->lname ?? ''))
+                    ?: ($user->email ?? 'User'),
                 'email' => $user->email,
                 'role' => $user->getRoleNames()->first(),
                 'roles' => $user->getRoleNames()->values()->all(),
@@ -1393,6 +1364,7 @@ class CommerceAdminController extends Controller
                 || str_starts_with($referenceKey, 'admin:provisioning-countdown:') => 'provisioning_action',
             str_starts_with($referenceKey, 'deal-reply:') => 'deal_reply',
             str_starts_with($referenceKey, 'deal-customer-reply:') => 'deal_reply',
+            str_starts_with($referenceKey, 'admin:lead-assigned:') => 'crm_lead',
             default => (string) ($row->type ?: 'general'),
         };
 
@@ -1404,6 +1376,7 @@ class CommerceAdminController extends Controller
             'web_design_quotation' => 'Pending Quotation',
             'provisioning_action' => 'Assigned',
             'deal_reply' => 'Deal Reply',
+            'crm_lead' => 'Assigned',
             default => 'Unread',
         };
 
@@ -1798,9 +1771,23 @@ class CommerceAdminController extends Controller
             || $staff->hasAnyRole(['sales_admin', 'sales_staff']);
     }
 
+    private function staffCanSeeContactInquiries(User $staff): bool
+    {
+        if ($this->isSuperAdmin($staff)) {
+            return true;
+        }
+
+        if ($staff->hasAnyRole(['sales_staff', 'sales_admin', 'finance_admin'])) {
+            return false;
+        }
+
+        return $staff->hasRole('customer_care');
+    }
+
     private function staffInboxNotificationQuery(User $staff)
     {
         $canSeeQuotations = $this->canSeeWebDesignQuotations($staff);
+        $canSeeInquiries = $this->staffCanSeeContactInquiries($staff);
 
         return CustomerNotification::query()
             ->where('customer_id', $staff->id)
@@ -1815,6 +1802,7 @@ class CommerceAdminController extends Controller
                         'support_ticket',
                         'contact_inquiry',
                         'deal_reply',
+                        'crm_lead',
                     ]);
             })
             ->when(! $canSeeQuotations, function ($query) {
@@ -1827,6 +1815,17 @@ class CommerceAdminController extends Controller
                             $keys->where('reference_key', 'not like', 'admin:webdesign-quotation:%')
                                 ->where('reference_key', 'not like', 'admin:webdesign-priced:%');
                         });
+                });
+            })
+            ->when(! $canSeeInquiries, function ($query) {
+                $query->where(function ($inner) {
+                    $inner->where(function ($types) {
+                        $types->whereNull('type')
+                            ->orWhere('type', '!=', 'contact_inquiry');
+                    })->where(function ($keys) {
+                        $keys->whereNull('reference_key')
+                            ->orWhere('reference_key', 'not like', 'admin:contact-inquiry:%');
+                    });
                 });
             });
     }

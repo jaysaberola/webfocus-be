@@ -41,6 +41,8 @@ class RoleSeeder extends Seeder
         $commerceFinanceSales = [
             'commerce_dashboard.view',
             'customers.manage',
+            'commerce_leads.view',
+            'commerce_leads.manage',
             'sales_transactions.view',
             'sales_transactions.manage',
             'commerce_approvals.view',
@@ -108,6 +110,8 @@ class RoleSeeder extends Seeder
             'dashboard.view',
             'commerce_dashboard.view',
             'customers.manage',
+            'commerce_leads.view',
+            'commerce_leads.manage',
             'sales_transactions.view',
             'sales_transactions.manage',
             'commerce_approvals.view',
