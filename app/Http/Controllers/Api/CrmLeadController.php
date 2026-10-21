@@ -114,12 +114,12 @@ class CrmLeadController extends Controller
         ];
 
         $validated = $request->validate($rules);
-        $this->assertValidLeadAssignee($validated['lead_owner_id'] ?? null);
+        $this->assertValidLeadAssignee($request->user(), $validated['lead_owner_id'] ?? null);
 
         return $validated;
     }
 
-    private function assertValidLeadAssignee(?int $userId): void
+    private function assertValidLeadAssignee(?User $actor, ?int $userId): void
     {
         if (! $userId) {
             return;
@@ -127,11 +127,39 @@ class CrmLeadController extends Controller
 
         $assignee = User::query()->with('roles')->find($userId);
         abort_unless($assignee, 422, 'Selected assignee was not found.');
-        abort_unless(
-            app(ClientOwnerRotator::class)->isLeadSalesAssignee($assignee),
-            422,
-            'Lead must be assigned to an active Sales Staff or Sales Admin account.',
-        );
+        abort_unless($assignee->is_active, 422, 'Selected assignee is not active.');
+
+        if ($actor?->hasRole('admin')) {
+            abort_unless(
+                $assignee->hasAnyRole(['sales_staff', 'sales_admin']),
+                422,
+                'Lead must be assigned to Sales Admin or Sales Staff.',
+            );
+
+            return;
+        }
+
+        if ($assignee->hasRole('sales_admin')) {
+            abort_unless(
+                $actor?->hasRole('customer_care'),
+                422,
+                'Only Customer Care can assign leads to Sales Admin.',
+            );
+
+            return;
+        }
+
+        if ($assignee->hasRole('sales_staff')) {
+            abort_unless(
+                $actor?->hasRole('sales_admin'),
+                422,
+                'Only Sales Admin can assign leads to Sales Staff.',
+            );
+
+            return;
+        }
+
+        abort(422, 'Lead must be assigned to Sales Admin or Sales Staff.');
     }
 
     private function mapLead(CrmLead $lead): array
@@ -208,7 +236,7 @@ class CrmLeadController extends Controller
             return;
         }
 
-        $assignee = $lead->leadOwner;
+        $assignee = $lead->leadOwner?->loadMissing('roles');
         if (! $assignee || ! $assignee->is_active) {
             return;
         }
@@ -218,19 +246,39 @@ class CrmLeadController extends Controller
         $contact = trim(trim((string) ($lead->first_name ?? '')) . ' ' . trim((string) ($lead->last_name ?? '')));
         $contactLabel = $contact !== '' ? " ({$contact})" : '';
 
-        CustomerNotification::query()->updateOrCreate(
-            [
-                'customer_id' => $assigneeId,
-                'reference_key' => 'admin:lead-assigned:' . $lead->id,
-            ],
-            [
-                'title' => 'Lead assigned to you',
-                'body' => "{$actorName} assigned lead {$company}{$contactLabel} to you. Open Leads to review and follow up.",
-                'type' => 'crm_lead',
-                'action_url' => '/public/commerce-admin?tab=leads',
-                'read_at' => null,
-            ]
-        );
+        if ($assignee->hasRole('sales_admin')) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $assigneeId,
+                    'reference_key' => 'admin:lead-assigned-admin:' . $lead->id,
+                ],
+                [
+                    'title' => 'New lead for Sales Admin',
+                    'body' => "{$actorName} assigned lead {$company}{$contactLabel} to you. Open Leads and assign a Sales Staff member to follow up.",
+                    'type' => 'crm_lead',
+                    'action_url' => '/public/commerce-admin?tab=leads',
+                    'read_at' => null,
+                ]
+            );
+
+            return;
+        }
+
+        if ($assignee->hasRole('sales_staff')) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $assigneeId,
+                    'reference_key' => 'admin:lead-assigned-staff:' . $lead->id,
+                ],
+                [
+                    'title' => 'Lead assigned to you',
+                    'body' => "{$actorName} assigned lead {$company}{$contactLabel} to you for follow-up. Open Leads to review.",
+                    'type' => 'crm_lead',
+                    'action_url' => '/public/commerce-admin?tab=leads',
+                    'read_at' => null,
+                ]
+            );
+        }
     }
 
     private function displayUserName(?User $user): string

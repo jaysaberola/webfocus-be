@@ -172,6 +172,34 @@ class ClientOwnerRotator
     }
 
     /**
+     * @return Collection<int, User>
+     */
+    public function assignableSalesAdmins(): Collection
+    {
+        return User::role(['sales_admin'])
+            ->with('roles')
+            ->where('is_active', true)
+            ->get()
+            ->unique('id')
+            ->sortBy(fn (User $user) => strtolower(trim($user->full_name ?: (string) $user->email)))
+            ->values();
+    }
+
+    /**
+     * @return Collection<int, User>
+     */
+    public function assignableSalesStaffMembers(): Collection
+    {
+        return User::role(['sales_staff'])
+            ->with('roles')
+            ->where('is_active', true)
+            ->get()
+            ->unique('id')
+            ->sortBy(fn (User $user) => strtolower(trim($user->full_name ?: (string) $user->email)))
+            ->values();
+    }
+
+    /**
      * Every active Sales Staff / Sales Admin (and configured sales team) for lead assignment.
      *
      * @return Collection<int, User>

@@ -74,6 +74,10 @@ class CommerceAdminController extends Controller
                 ->orderBy('fname')
                 ->orderBy('lname')
                 ->get();
+        } elseif ($request->input('for') === 'lead_sales_admin') {
+            $records = app(ClientOwnerRotator::class)->assignableSalesAdmins();
+        } elseif ($request->input('for') === 'lead_sales_staff') {
+            $records = app(ClientOwnerRotator::class)->assignableSalesStaffMembers();
         } elseif (in_array($request->input('for'), ['sales_staff', 'lead_assignee'], true)) {
             $records = app(ClientOwnerRotator::class)->assignableSalesUsers();
         } else {
@@ -1364,7 +1368,9 @@ class CommerceAdminController extends Controller
                 || str_starts_with($referenceKey, 'admin:provisioning-countdown:') => 'provisioning_action',
             str_starts_with($referenceKey, 'deal-reply:') => 'deal_reply',
             str_starts_with($referenceKey, 'deal-customer-reply:') => 'deal_reply',
-            str_starts_with($referenceKey, 'admin:lead-assigned:') => 'crm_lead',
+            str_starts_with($referenceKey, 'admin:lead-assigned:')
+                || str_starts_with($referenceKey, 'admin:lead-assigned-admin:')
+                || str_starts_with($referenceKey, 'admin:lead-assigned-staff:') => 'crm_lead',
             default => (string) ($row->type ?: 'general'),
         };
 
