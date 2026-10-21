@@ -229,12 +229,17 @@ class CrmLeadController extends Controller
     {
         $assigneeId = $lead->lead_owner_id ? (int) $lead->lead_owner_id : null;
         if (! $assigneeId) {
+            $this->revokeLeadAssignmentNotifications((int) $lead->id);
+
             return;
         }
 
         if ($previousOwnerId !== null && (int) $previousOwnerId === $assigneeId) {
             return;
         }
+
+        // Only the current assignee keeps an active lead alert (remove prior assignees / admin copies).
+        $this->revokeLeadAssignmentNotifications((int) $lead->id, $assigneeId);
 
         $assignee = $lead->leadOwner?->loadMissing('roles');
         if (! $assignee || ! $assignee->is_active) {
@@ -290,5 +295,29 @@ class CrmLeadController extends Controller
         $name = trim(($user->fname ?? '') . ' ' . ($user->lname ?? ''));
 
         return $name !== '' ? $name : (string) ($user->email ?: 'A team member');
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function leadNotificationReferenceKeys(int $leadId): array
+    {
+        return [
+            'admin:lead-assigned:' . $leadId,
+            'admin:lead-assigned-admin:' . $leadId,
+            'admin:lead-assigned-staff:' . $leadId,
+        ];
+    }
+
+    private function revokeLeadAssignmentNotifications(int $leadId, ?int $exceptStaffUserId = null): void
+    {
+        $query = CustomerNotification::query()
+            ->whereIn('reference_key', $this->leadNotificationReferenceKeys($leadId));
+
+        if ($exceptStaffUserId) {
+            $query->where('customer_id', '!=', $exceptStaffUserId);
+        }
+
+        $query->delete();
     }
 }

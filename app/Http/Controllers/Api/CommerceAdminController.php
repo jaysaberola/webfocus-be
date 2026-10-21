@@ -1260,6 +1260,9 @@ class CommerceAdminController extends Controller
         if ($kind === 'deal_reply') {
             return 'Open Deal';
         }
+        if (str_contains($url, 'tab=leads') || $kind === 'crm_lead') {
+            return 'Open Leads';
+        }
 
         return 'Open Deals';
     }
