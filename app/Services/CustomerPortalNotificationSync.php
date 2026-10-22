@@ -94,6 +94,8 @@ class CustomerPortalNotificationSync
             ->whereNotIn('reference_key', $activeKeys ?: ['__none__'])
             ->delete();
 
+        app(ServiceExpirationNotifier::class)->processForCustomer($customerId);
+
         $this->stripTechnicalFromCustomerNotices($customerId);
     }
 
@@ -141,6 +143,50 @@ class CustomerPortalNotificationSync
                 'actionLabel' => 'View Orders',
                 'actionHref' => '/public/dashboard?tab=orders',
                 'icon' => 'card',
+            ];
+        }
+
+        $expiringSoon = $services->filter(function (CustomerService $service) {
+            if (strtolower((string) $service->status) === 'expired') {
+                return false;
+            }
+            $days = app(ServiceExpirationNotifier::class)->daysUntilExpiry($service);
+
+            return $days !== null && $days >= 0 && $days <= 30;
+        });
+        if ($expiringSoon->isNotEmpty()) {
+            $count = $expiringSoon->count();
+            $first = $expiringSoon->first();
+            $days = app(ServiceExpirationNotifier::class)->daysUntilExpiry($first);
+            $alerts[] = [
+                'id' => 'alert-service-expiry',
+                'tone' => 'billing',
+                'title' => $count === 1 ? 'Service expiring soon' : 'Services expiring soon',
+                'message' => $count === 1
+                    ? ($first->title ?: 'A service') . ' expires in ' . max(0, (int) $days) . ' day(s). Renew to avoid interruption.'
+                    : 'You have ' . $count . ' services expiring within 30 days.',
+                'actionLabel' => 'View Services',
+                'actionHref' => '/public/dashboard?tab=orders&renew=1',
+                'icon' => 'bell',
+            ];
+        }
+
+        $expired = $services->filter(function (CustomerService $service) {
+            return app(ServiceExpirationNotifier::class)->isExpired($service);
+        });
+        if ($expired->isNotEmpty()) {
+            $count = $expired->count();
+            $first = $expired->first();
+            $alerts[] = [
+                'id' => 'alert-service-renewal',
+                'tone' => 'payment',
+                'title' => $count === 1 ? 'Renew expired service' : 'Renew expired services',
+                'message' => $count === 1
+                    ? ($first->title ?: 'A service') . ' has expired. Renew to make it active again.'
+                    : 'You have ' . $count . ' expired services. Renew to restore active service.',
+                'actionLabel' => 'View Services',
+                'actionHref' => '/public/dashboard?tab=orders&renew=1',
+                'icon' => 'bell',
             ];
         }
 

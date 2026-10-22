@@ -42,6 +42,8 @@ class SalesTransactionController extends Controller
             'items',
             'proposals',
             'paynamicsPaymentReferences',
+            'provisioningRun:id,sales_transaction_id,status,approved_at',
+            'provisioningRun.actions:id,provisioning_run_id,service_name,status,done_at,completed_at',
         ];
     }
 

@@ -247,11 +247,11 @@ class CommerceAdminController extends Controller
             ->where(function ($query) {
                 $query->where(function ($expiration) {
                     $expiration->whereNotNull('expires_at')
-                        ->where('expires_at', '<=', now()->addDays(30));
+                        ->where('expires_at', '<=', now()->addDays(90));
                 })->orWhere(function ($subscription) {
                     $subscription->whereNull('expires_at')
                         ->whereNotNull('renew_at')
-                        ->where('renew_at', '<=', now()->addDays(30));
+                        ->where('renew_at', '<=', now()->addDays(90));
                 });
             })
             ->orderByRaw('COALESCE(expires_at, renew_at) asc')
@@ -1374,6 +1374,8 @@ class CommerceAdminController extends Controller
             str_starts_with($referenceKey, 'admin:lead-assigned:')
                 || str_starts_with($referenceKey, 'admin:lead-assigned-admin:')
                 || str_starts_with($referenceKey, 'admin:lead-assigned-staff:') => 'crm_lead',
+            str_starts_with($referenceKey, 'admin:service-renewal:') => 'service_renewal',
+            str_starts_with($referenceKey, 'admin:service-expiry:') => 'service_expiry',
             default => (string) ($row->type ?: 'general'),
         };
 
