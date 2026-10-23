@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Support\RelatedPaymentSync;
 use App\Support\TransactionLabelResolver;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use OwenIt\Auditing\Auditable;
@@ -105,5 +106,16 @@ class SalesTransaction extends Model implements AuditableContract
     public function provisioningRun()
     {
         return $this->hasOne(ProvisioningRun::class);
+    }
+
+    /**
+     * Admin draft deals are internal until finalized — hide from the customer portal.
+     */
+    public function scopeCustomerVisible(Builder $query): Builder
+    {
+        return $query->where(function (Builder $q) {
+            $q->whereNull('order_status')
+                ->orWhereRaw("LOWER(TRIM(order_status)) <> 'draft'");
+        });
     }
 }

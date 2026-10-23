@@ -919,4 +919,83 @@ class DealMeta
             fn ($part) => $part !== ''
         )));
     }
+
+    public const PRICING_MISSING = 'missing_price';
+
+    public const PRICING_AWAITING = 'awaiting_price';
+
+    public const PRICING_REVIEW = 'price_updated_review';
+
+    public const PRICING_READY = 'draft_ready';
+
+    /**
+     * @param  array<string, mixed>  $patch
+     */
+    public static function merge(array $patch, ?string $notes): string
+    {
+        $meta = array_merge(self::parse($notes), $patch);
+
+        return self::replaceMeta((string) $notes, $meta);
+    }
+
+    public static function pricingWorkflowStatus(?string $notes): string
+    {
+        $status = trim((string) (self::parse($notes)['pricingWorkflowStatus'] ?? ''));
+
+        return $status !== '' ? $status : self::PRICING_MISSING;
+    }
+
+    public static function isDraftOrder(?SalesTransaction $transaction): bool
+    {
+        if (! $transaction) {
+            return false;
+        }
+
+        return strtolower(trim((string) $transaction->order_status)) === 'draft';
+    }
+
+    /**
+     * @param  iterable<mixed>|null  $items
+     */
+    public static function hasMissingCatalogPrices(?string $notes, $items = null): bool
+    {
+        $amounts = self::amountMap($notes, 'dealAmounts');
+        if ($items === null) {
+            return $amounts === [];
+        }
+
+        foreach ($items as $item) {
+            $name = trim((string) (is_array($item) ? ($item['name'] ?? '') : ($item->name ?? '')));
+            if ($name === '') {
+                continue;
+            }
+            $lineTotal = round((float) (is_array($item) ? ($item['total_price'] ?? $item['price'] ?? 0) : ($item->total_price ?? $item->price ?? 0)), 2);
+            $metaAmount = self::amountFor($amounts, $name);
+            if ($lineTotal <= 0 && $metaAmount <= 0) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static function syncPricingWorkflowStatus(?string $notes, bool $isDraft, bool $hasMissingPrices): string
+    {
+        if (! $isDraft) {
+            return '';
+        }
+
+        $current = self::pricingWorkflowStatus($notes);
+        if ($current === self::PRICING_AWAITING) {
+            return $hasMissingPrices ? self::PRICING_AWAITING : self::PRICING_REVIEW;
+        }
+        if (! $hasMissingPrices && in_array($current, [self::PRICING_MISSING, self::PRICING_REVIEW], true)) {
+            return self::PRICING_REVIEW;
+        }
+        if ($hasMissingPrices && $current === self::PRICING_REVIEW) {
+            return self::PRICING_REVIEW;
+        }
+
+        return $hasMissingPrices ? self::PRICING_MISSING : self::PRICING_READY;
+    }
 }

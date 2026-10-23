@@ -154,6 +154,10 @@ class CustomerPortalProvisioner
         }
 
         if ($paid && ($live || self::isProvisioningFinished($transaction))) {
+            if (self::subscriptionExpired($transaction)) {
+                return self::STATUS_EXPIRED;
+            }
+
             return self::STATUS_ACTIVE;
         }
 
@@ -174,6 +178,16 @@ class CustomerPortalProvisioner
         }
 
         return self::STATUS_PENDING;
+    }
+
+    public static function subscriptionExpired(SalesTransaction $transaction): bool
+    {
+        $end = DealMeta::clientSubscriptionEnd($transaction->notes);
+        if (! $end) {
+            return false;
+        }
+
+        return $end->copy()->startOfDay()->lt(now()->startOfDay());
     }
 
     public static function resolveStatusForService(CustomerService $service): string

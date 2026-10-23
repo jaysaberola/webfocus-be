@@ -65,6 +65,7 @@ class SalesTransactionController extends Controller
             ->when($request->customer_id, fn($q) => $q->where('customer_id', $request->customer_id))
             ->when($request->payment_status, fn($q) => $q->where('payment_status', $request->payment_status))
             ->when($request->order_status, fn($q) => $q->where('order_status', $request->order_status))
+            ->when($request->boolean('exclude_draft'), fn ($q) => $q->where('order_status', '!=', 'draft'))
             ->when(
                 $request->filled('transacted_at_from'),
                 fn($q) => $q->whereDate('transacted_at', '>=', $request->input('transacted_at_from'))
@@ -96,6 +97,20 @@ class SalesTransactionController extends Controller
             $validated['notes'] ?? null,
             array_map(fn ($item) => (string) ($item['name'] ?? ''), $items)
         );
+        $isDraft = $this->isDraftSave($request, $validated);
+        if ($isDraft) {
+            $validated['order_status'] = 'draft';
+            $validated['payment_status'] = $validated['payment_status'] ?? 'pending';
+            $missingPrices = DealMeta::hasMissingCatalogPrices($validated['notes'] ?? null, $items);
+            $validated['notes'] = DealMeta::merge([
+                'pricingWorkflowStatus' => DealMeta::syncPricingWorkflowStatus(
+                    $validated['notes'] ?? null,
+                    true,
+                    $missingPrices
+                ),
+                'dealCreatedByUserId' => $request->user()?->id,
+            ], $validated['notes'] ?? null);
+        }
         $explicitOwnerId = isset($validated['client_owner_id'])
             ? (int) $validated['client_owner_id']
             : null;
@@ -113,7 +128,7 @@ class SalesTransactionController extends Controller
             return $transaction;
         });
 
-        if ($transaction->customer_id) {
+        if ($transaction->customer_id && ! $isDraft) {
             app(CustomerPortalProvisioner::class)
                 ->provisionFromTransaction($transaction->fresh(['items']));
         }
@@ -583,6 +598,27 @@ class SalesTransactionController extends Controller
             ? array_map(fn ($item) => (string) ($item['name'] ?? ''), $items)
             : $salesTransaction->items()->pluck('name')->all();
         $validated['notes'] = DealMeta::applyManagedDates($validated['notes'] ?? null, $itemNames);
+        $isDraft = $this->isDraftSave($request, $validated, $salesTransaction);
+        $wasDraft = DealMeta::isDraftOrder($salesTransaction);
+        if ($isDraft) {
+            $validated['order_status'] = 'draft';
+            $itemSource = is_array($items) ? $items : $salesTransaction->items->all();
+            $missingPrices = DealMeta::hasMissingCatalogPrices($validated['notes'] ?? null, $itemSource);
+            $validated['notes'] = DealMeta::merge([
+                'pricingWorkflowStatus' => DealMeta::syncPricingWorkflowStatus(
+                    $validated['notes'] ?? null,
+                    true,
+                    $missingPrices
+                ),
+            ], $validated['notes'] ?? null);
+        } elseif ($wasDraft && ! $this->isDraftSave($request, $validated, $salesTransaction)) {
+            if (strtolower((string) ($validated['order_status'] ?? '')) === 'draft') {
+                $validated['order_status'] = 'pending';
+            }
+            $validated['notes'] = DealMeta::merge([
+                'pricingWorkflowStatus' => '',
+            ], $validated['notes'] ?? null);
+        }
         $conversationClient = DealMeta::clientNotes($validated['notes'])
             ?: WebDesignMeta::clientNotes($validated['notes']);
         $conversationSales = DealMeta::salesNotes($validated['notes'])
@@ -663,7 +699,7 @@ class SalesTransactionController extends Controller
             }
         });
 
-        if ($salesTransaction->customer_id) {
+        if ($salesTransaction->customer_id && ! DealMeta::isDraftOrder($salesTransaction->fresh())) {
             app(CustomerPortalProvisioner::class)
                 ->refreshServicesFromTransaction(
                     $salesTransaction->fresh(['items'])
@@ -671,6 +707,16 @@ class SalesTransactionController extends Controller
         }
 
         $fresh = $salesTransaction->fresh(['items']);
+        $draftPriceNotified = false;
+        if ($fresh && ($isDraft || $wasDraft)) {
+            $draftPriceNotified = $this->notifyDraftPriceUpdated(
+                $fresh,
+                $previousGrandTotal,
+                $linePricesChanged,
+                $request->user(),
+                $wasDraft,
+            );
+        }
         if ($fresh && $quoteSent) {
             $this->notifyCustomerQuotationPriced($fresh, $previousGrandTotal > 0);
             $actor = $request->user();
@@ -684,6 +730,7 @@ class SalesTransactionController extends Controller
         return response()->json([
             'message' => 'Sales transaction updated successfully',
             'quoted_price_sent' => $quoteSent,
+            'draft_price_notified' => $draftPriceNotified,
             'data' => $salesTransaction->fresh()->load($this->transactionRelations()),
         ]);
     }
@@ -788,6 +835,59 @@ class SalesTransactionController extends Controller
                 'conversation' => DealMeta::conversation($notes),
                 'quotedPrice' => DealMeta::quotedPrice($notes),
             ],
+        ]);
+    }
+
+    public function requestDealPrice(Request $request, SalesTransaction $salesTransaction)
+    {
+        $actor = $request->user();
+        abort_unless($actor, 401);
+        abort_if($actor->hasRole('customer'), 403, 'Staff only.');
+
+        $validated = $request->validate([
+            'message' => ['required', 'string', 'max:2000'],
+            'assignee_id' => ['required', 'integer', 'exists:users,id'],
+        ]);
+
+        $message = trim($validated['message']);
+        $assigneeId = (int) $validated['assignee_id'];
+        abort_if($message === '', 422, 'Enter a note for the pricing assignee.');
+
+        $salesTransaction->loadMissing(['items', 'customer']);
+        $previousSalesNotes = DealMeta::salesNotes($salesTransaction->notes);
+        $stamp = now()->format('Y-m-d H:i').' — Price request: '.$message;
+        $salesNotes = trim($previousSalesNotes === '' ? $stamp : $previousSalesNotes."\n\n".$stamp);
+        $notes = DealMeta::withConversation($salesTransaction->notes, null, $salesNotes);
+        $notes = DealMeta::merge([
+            'pricingWorkflowStatus' => DealMeta::PRICING_AWAITING,
+            'priceAssigneeId' => $assigneeId,
+            'priceRequestedAt' => now()->toIso8601String(),
+            'dealCreatedByUserId' => (int) (DealMeta::parse($notes)['dealCreatedByUserId'] ?? $salesTransaction->user_id ?? $actor->id),
+        ], $notes);
+
+        $salesTransaction->update([
+            'order_status' => 'draft',
+            'notes' => $notes,
+        ]);
+
+        $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? ''))) ?: 'Sales';
+        $dealLabel = TransactionLabelResolver::planLabel($salesTransaction->items, $salesTransaction->transaction_no);
+        $clientLabel = trim((string) ($salesTransaction->customer_name ?? 'Client'));
+
+        app(CommerceStaffNotifier::class)->notifyStaffIds(
+            [$assigneeId],
+            'deal-price-request:'.$salesTransaction->id,
+            'Deal needs pricing',
+            $actorName.' requested pricing for '.$clientLabel
+                .($dealLabel ? " ({$dealLabel})" : '')
+                .'. '.$message,
+            'deal_price_request',
+            '/public/commerce-admin?tab=orders&dealsScope=drafts&dealId='.$salesTransaction->id,
+        );
+
+        return response()->json([
+            'message' => 'Price request sent.',
+            'data' => $salesTransaction->fresh()->load($this->transactionRelations()),
         ]);
     }
 
@@ -1308,5 +1408,77 @@ class SalesTransactionController extends Controller
             '/public/commerce-admin?tab=orders',
             true,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $validated
+     */
+    private function isDraftSave(Request $request, array $validated, ?SalesTransaction $existing = null): bool
+    {
+        $mode = strtolower(trim((string) $request->input('save_mode', '')));
+        if ($mode === 'finalize') {
+            return false;
+        }
+        if ($mode === 'draft') {
+            return true;
+        }
+
+        return strtolower(trim((string) ($validated['order_status'] ?? $existing?->order_status ?? ''))) === 'draft';
+    }
+
+    private function notifyDraftPriceUpdated(
+        SalesTransaction $transaction,
+        float $previousGrandTotal,
+        bool $linePricesChanged,
+        ?User $actor,
+        bool $wasDraft,
+    ): bool {
+        $isDraft = DealMeta::isDraftOrder($transaction);
+        if (! $isDraft && ! $wasDraft) {
+            return false;
+        }
+
+        $nextTotal = round((float) $transaction->grand_total, 2);
+        $priceChanged = $linePricesChanged || abs($nextTotal - $previousGrandTotal) >= 0.01;
+        if (! $priceChanged || $nextTotal <= 0) {
+            return false;
+        }
+
+        $meta = DealMeta::parse($transaction->notes);
+        $actorId = (int) ($actor?->id ?? 0);
+        $recipientIds = array_values(array_unique(array_filter([
+            (int) ($meta['dealCreatedByUserId'] ?? 0),
+            (int) ($meta['priceAssigneeId'] ?? 0),
+        ], fn (int $id) => $id > 0 && $id !== $actorId)));
+
+        if ($recipientIds === []) {
+            return false;
+        }
+
+        $actorName = trim((string) (($actor->fname ?? '').' '.($actor->lname ?? ''))) ?: 'Staff';
+        $dealLabel = TransactionLabelResolver::planLabel($transaction->items, $transaction->transaction_no);
+        $action = $isDraft
+            ? 'set pricing on draft '.$transaction->transaction_no
+            : 'updated pricing and finalized '.$transaction->transaction_no;
+        $scope = $isDraft ? 'drafts' : 'active';
+
+        app(CommerceStaffNotifier::class)->notifyStaffIds(
+            $recipientIds,
+            'deal-price-updated:'.$transaction->id.':'.(int) round($nextTotal * 100),
+            'Deal price updated',
+            $actorName.' '.$action
+                .($dealLabel ? " ({$dealLabel})" : '')
+                .' — '.$this->formatPeso($nextTotal).'. Review and complete the deal.',
+            'deal_price_request',
+            '/public/commerce-admin?tab=orders&dealsScope='.$scope.'&dealId='.$transaction->id,
+        );
+
+        return true;
+    }
+
+    private function formatPeso(float $amount): string
+    {
+        return '₱'.number_format($amount, 2, '.', ',');
+
     }
 }

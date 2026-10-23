@@ -123,6 +123,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'proposals']);
     Route::post('/sales-transactions/{salesTransaction}/proposals', [SalesTransactionController::class, 'uploadProposal']);
     Route::post('/sales-transactions/{salesTransaction}/proceed-payment', [SalesTransactionController::class, 'proceedPayment']);
+    Route::post('/sales-transactions/{salesTransaction}/price-request', [SalesTransactionController::class, 'requestDealPrice']);
     Route::post('/sales-transactions/{salesTransaction}/notes', [SalesTransactionController::class, 'replyConversation']);
     Route::get('/sales-transactions/{salesTransaction}/conversation', [SalesTransactionController::class, 'conversation']);
     Route::get('/sales-transactions/{salesTransaction}/files', [SalesTransactionController::class, 'downloadConversationFile']);

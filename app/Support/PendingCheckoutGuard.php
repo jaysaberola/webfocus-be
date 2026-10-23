@@ -17,6 +17,7 @@ class PendingCheckoutGuard
     {
         return SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->customerVisible()
             ->where('grand_total', '>', 0)
             ->whereNotIn('payment_status', ['paid', 'completed', 'success', 'cancelled', 'canceled'])
             ->where(function ($query) {

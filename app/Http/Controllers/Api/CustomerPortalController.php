@@ -52,6 +52,7 @@ class CustomerPortalController extends Controller
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->customerVisible()
             ->with(['items', 'provisioningRun'])
             ->latest('transacted_at')
             ->get();
@@ -128,6 +129,7 @@ class CustomerPortalController extends Controller
 
         $orders = SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->customerVisible()
             ->with($with)
             ->latest('created_at')
             ->latest('id')
@@ -141,7 +143,7 @@ class CustomerPortalController extends Controller
     public function cancelOrder(Request $request, SalesTransaction $salesTransaction)
     {
         $customer = $this->resolveCustomer($request);
-        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
 
         $salesTransaction->loadMissing('items');
         $status = CustomerPortalProvisioner::resolveServiceStatus($salesTransaction);
@@ -207,7 +209,7 @@ class CustomerPortalController extends Controller
     public function downloadConversationFile(Request $request, SalesTransaction $salesTransaction)
     {
         $customer = $this->resolveCustomer($request);
-        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
 
         return DealConversationFile::download(
             $salesTransaction,
@@ -219,7 +221,7 @@ class CustomerPortalController extends Controller
     public function conversation(Request $request, SalesTransaction $salesTransaction)
     {
         $customer = $this->resolveCustomer($request);
-        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
 
         $notes = $salesTransaction->notes;
 
@@ -238,7 +240,7 @@ class CustomerPortalController extends Controller
     public function replyOrder(Request $request, SalesTransaction $salesTransaction)
     {
         $customer = $this->resolveCustomer($request);
-        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
 
         $validated = $request->validate([
             'message' => ['nullable', 'string', 'max:2000'],
@@ -345,7 +347,7 @@ class CustomerPortalController extends Controller
     public function updateOrderItems(Request $request, SalesTransaction $salesTransaction)
     {
         $customer = $this->resolveCustomer($request);
-        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
 
         $salesTransaction->loadMissing('items');
         $status = CustomerPortalProvisioner::resolveServiceStatus($salesTransaction);
@@ -453,6 +455,7 @@ class CustomerPortalController extends Controller
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->customerVisible()
             ->where(function ($query) {
                 $query->whereNull('order_status')
                     ->orWhereNotIn('order_status', ['cancelled', 'canceled']);
@@ -470,6 +473,7 @@ class CustomerPortalController extends Controller
 
         $allTransactions = SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->customerVisible()
             ->where(function ($query) {
                 $query->whereNull('order_status')
                     ->orWhereNotIn('order_status', ['cancelled', 'canceled']);
@@ -683,7 +687,7 @@ class CustomerPortalController extends Controller
     public function listProposals(Request $request, SalesTransaction $salesTransaction)
     {
         $customer = $this->resolveCustomer($request);
-        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
 
         $rows = $salesTransaction->proposals()->latest()->get()->map(fn (SalesTransactionProposal $proposal) => [
             'id' => $proposal->id,
@@ -1442,6 +1446,11 @@ class CustomerPortalController extends Controller
             && ! WebDesignQuotation::isPendingQuotation($row);
         if ($canCheckout) {
             $status = 'Pending Payment';
+        } elseif (
+            CustomerPortalProvisioner::subscriptionExpired($row)
+            && in_array($status, CustomerPortalProvisioner::activeStatusValues(), true)
+        ) {
+            $status = CustomerPortalProvisioner::STATUS_EXPIRED;
         }
         $domain = DealMeta::domainName($row->notes)
             ?: $row->items
@@ -1449,7 +1458,11 @@ class CustomerPortalController extends Controller
                 ->first(fn ($name) => TransactionLabelResolver::looksLikeDomain($name));
 
         $paymentDue = TransactionLabelResolver::dueDateFrom($row->transacted_at);
-        $subscriptionEnd = DealMeta::clientSubscriptionEnd($row->notes)?->format('Y-m-d');
+        $subscriptionEndAt = DealMeta::clientSubscriptionEnd($row->notes);
+        $subscriptionEnd = $subscriptionEndAt?->format('Y-m-d');
+        $daysUntilSubscriptionEnd = $subscriptionEndAt
+            ? (int) now()->startOfDay()->diffInDays($subscriptionEndAt->copy()->startOfDay(), false)
+            : null;
 
         return [
             'id' => $row->transaction_no,
@@ -1462,6 +1475,8 @@ class CustomerPortalController extends Controller
             'createdAt' => optional($row->created_at)?->toIso8601String(),
             'dueDate' => $subscriptionEnd ?: $paymentDue,
             'expiredDate' => $subscriptionEnd ?: $paymentDue,
+            'subscriptionEndDate' => $subscriptionEnd,
+            'daysUntilSubscriptionEnd' => $daysUntilSubscriptionEnd,
             'clientNotes' => DealMeta::clientNotes($row->notes) ?: WebDesignMeta::clientNotes($row->notes),
             'salesNotes' => DealMeta::salesNotes($row->notes) ?: WebDesignMeta::salesNotes($row->notes),
             'conversation' => DealMeta::conversation($row->notes),
@@ -2203,9 +2218,16 @@ class CustomerPortalController extends Controller
 
         return SalesTransaction::query()
             ->where('customer_id', $customer->id)
+            ->customerVisible()
             ->where('transaction_no', $transactionNo)
             ->with('items')
             ->firstOrFail();
+    }
+
+    private function assertCustomerOrderAccess(User $customer, SalesTransaction $salesTransaction): void
+    {
+        abort_unless((int) $salesTransaction->customer_id === (int) $customer->id, 403);
+        abort_if(DealMeta::isDraftOrder($salesTransaction), 404, 'Order not found.');
     }
 
     private function assertInvoicePayable(SalesTransaction $transaction): void

@@ -1260,6 +1260,9 @@ class CommerceAdminController extends Controller
         if ($kind === 'deal_reply') {
             return 'Open Deal';
         }
+        if ($kind === 'deal_price_request' || str_contains($url, 'dealsScope=drafts') || str_contains($url, 'tab=draft-deals')) {
+            return 'Open Draft Deal';
+        }
         if (str_contains($url, 'tab=leads') || $kind === 'crm_lead') {
             return 'Open Leads';
         }
@@ -1371,6 +1374,8 @@ class CommerceAdminController extends Controller
                 || str_starts_with($referenceKey, 'admin:provisioning-countdown:') => 'provisioning_action',
             str_starts_with($referenceKey, 'deal-reply:') => 'deal_reply',
             str_starts_with($referenceKey, 'deal-customer-reply:') => 'deal_reply',
+            str_starts_with($referenceKey, 'deal-price-request:') => 'deal_price_request',
+            str_starts_with($referenceKey, 'deal-price-updated:') => 'deal_price_request',
             str_starts_with($referenceKey, 'admin:lead-assigned:')
                 || str_starts_with($referenceKey, 'admin:lead-assigned-admin:')
                 || str_starts_with($referenceKey, 'admin:lead-assigned-staff:') => 'crm_lead',

@@ -77,4 +77,32 @@ class CommerceStaffNotifier
             ->unique()
             ->values();
     }
+
+    /**
+     * @param  array<int, int>  $staffIds
+     */
+    public function notifyStaffIds(
+        array $staffIds,
+        string $referenceKey,
+        string $title,
+        string $body,
+        string $type,
+        string $actionUrl,
+    ): void {
+        foreach (collect($staffIds)->unique()->filter(fn ($id) => (int) $id > 0) as $staffId) {
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => (int) $staffId,
+                    'reference_key' => $referenceKey,
+                ],
+                [
+                    'title' => $title,
+                    'body' => $body,
+                    'type' => $type,
+                    'action_url' => $actionUrl,
+                    'read_at' => null,
+                ]
+            );
+        }
+    }
 }

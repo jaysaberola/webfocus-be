@@ -6,6 +6,7 @@ use App\Models\CustomerNotification;
 use App\Models\CustomerPaymentProof;
 use App\Models\CustomerService;
 use App\Models\SalesTransaction;
+use App\Support\DealMeta;
 use App\Support\ProvisioningRules;
 use Illuminate\Support\Collection;
 
@@ -53,6 +54,7 @@ class CustomerPortalNotificationSync
 
         $transactions = SalesTransaction::query()
             ->where('customer_id', $customerId)
+            ->customerVisible()
             ->with('items')
             ->latest('transacted_at')
             ->get();
@@ -304,7 +306,8 @@ class CustomerPortalNotificationSync
     private function unpaidTransactions(Collection $transactions): Collection
     {
         return $transactions->filter(
-            fn (SalesTransaction $row) => CustomerPortalProvisioner::isUnpaid($row)
+            fn (SalesTransaction $row) => ! DealMeta::isDraftOrder($row)
+                && CustomerPortalProvisioner::isUnpaid($row)
         );
     }
 
@@ -319,6 +322,10 @@ class CustomerPortalNotificationSync
         }
 
         $paid = $transactions->filter(function (SalesTransaction $row) {
+            if (DealMeta::isDraftOrder($row)) {
+                return false;
+            }
+
             return in_array(strtolower((string) $row->payment_status), ['paid', 'completed', 'success'], true);
         });
 
