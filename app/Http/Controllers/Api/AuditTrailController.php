@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
+use App\Support\CmsAuditTrailScope;
 use OwenIt\Auditing\Models\Audit;
 
 class AuditTrailController extends Controller
@@ -13,6 +14,7 @@ class AuditTrailController extends Controller
         $search = $request->get('search');
 
         $audits = Audit::with('user')
+            ->tap(fn ($query) => CmsAuditTrailScope::apply($query))
             ->when($search, function ($q) use ($search) {
                 $q->where(function ($query) use ($search) {
                     $query->where('event', 'like', "%{$search}%")
