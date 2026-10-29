@@ -837,9 +837,30 @@ class CustomerController extends Controller
             ]];
         }
 
+        $billing = $block($source['billing'] ?? null);
+        $collection = $block($source['collection'] ?? null);
+
+        $hasBlockContent = static function (array $row): bool {
+            foreach (['person', 'designation', 'email', 'phone', 'mobile', 'attention', 'instructions', 'address', 'other'] as $key) {
+                if (trim((string) ($row[$key] ?? '')) !== '') {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        if (! $hasBlockContent($billing) && $hasBlockContent($collection)) {
+            $billing = $collection;
+        }
+        if (($billing['enabled'] ?? false) || ($collection['enabled'] ?? false)) {
+            $billing['enabled'] = true;
+        }
+        $collection = $billing;
+
         return [
-            'billing' => $block($source['billing'] ?? null),
-            'collection' => $block($source['collection'] ?? null),
+            'billing' => $billing,
+            'collection' => $collection,
             'technical' => $block($source['technical'] ?? null),
             'signatoriesEnabled' => filter_var($source['signatoriesEnabled'] ?? false, FILTER_VALIDATE_BOOLEAN),
             'signatories' => $signatories,
