@@ -406,15 +406,68 @@ class CommerceAdminController extends Controller
     {
         $this->resolveStaff($request);
 
-        $path = trim(str_replace('\\', '/', (string) ($paymentProof->file_path ?? '')), '/');
-        abort_if($path === '', 404, 'No file attached to this payment proof.');
-        abort_unless(Storage::disk('public')->exists($path), 404, 'Attached file was not found on the server.');
+        $resolved = $this->resolvePaymentProofDiskPath($paymentProof);
+        abort_if(
+            $resolved === null,
+            404,
+            'Attached file was not found on the server. Check storage/app/public for the recorded path, or ask the customer to re-upload.'
+        );
 
-        $name = trim((string) ($paymentProof->file_name ?: basename($path))) ?: 'payment-proof';
+        $name = trim((string) ($paymentProof->file_name ?: basename($resolved))) ?: 'payment-proof';
 
-        return Storage::disk('public')->response($path, $name, [
+        return Storage::disk('public')->response($resolved, $name, [
             'Content-Disposition' => 'inline; filename="'.$name.'"',
         ]);
+    }
+
+    /**
+     * Resolve a payment-proof path on the public disk, tolerating stored URL prefixes
+     * and common alternate folders used by seeders / older uploads.
+     */
+    private function resolvePaymentProofDiskPath(CustomerPaymentProof $paymentProof): ?string
+    {
+        $raw = trim(str_replace('\\', '/', (string) ($paymentProof->file_path ?? '')));
+        $raw = explode('?', $raw)[0] ?? $raw;
+
+        if (preg_match('#https?://#i', $raw)) {
+            $parts = parse_url($raw);
+            $raw = (string) ($parts['path'] ?? '');
+        }
+
+        $normalized = ltrim(preg_replace('#^/?(?:public/)?(?:storage/)?#', '', $raw) ?? $raw, '/');
+        $candidates = array_values(array_unique(array_filter([
+            $normalized,
+            $raw !== '' ? ltrim($raw, '/') : null,
+        ])));
+
+        $base = basename($normalized);
+        $customerId = (int) ($paymentProof->customer_id ?? 0);
+        if ($base !== '' && $base !== '.' && $base !== '/') {
+            if ($customerId > 0) {
+                $candidates[] = 'customer-payment-proofs/'.$customerId.'/'.$base;
+            }
+            $candidates[] = 'customer-payment-proofs/'.$base;
+            $candidates[] = 'payment-proofs/'.$base;
+        }
+
+        $disk = Storage::disk('public');
+        foreach ($candidates as $candidate) {
+            $candidate = trim(str_replace('\\', '/', (string) $candidate), '/');
+            if ($candidate !== '' && $disk->exists($candidate)) {
+                return $candidate;
+            }
+        }
+
+        // Last resort: scan the customer folder by basename (handles renamed dirs / partial moves).
+        if ($customerId > 0 && $base !== '' && $base !== '.' && $disk->exists('customer-payment-proofs/'.$customerId)) {
+            foreach ($disk->files('customer-payment-proofs/'.$customerId) as $file) {
+                if (strcasecmp(basename($file), $base) === 0) {
+                    return $file;
+                }
+            }
+        }
+
+        return null;
     }
 
     public function verifyPaymentProof(Request $request, CustomerPaymentProof $paymentProof)
