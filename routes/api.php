@@ -85,6 +85,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/dashboard', [CommerceAdminController::class, 'dashboard']);
         Route::get('/approvals', [CommerceAdminController::class, 'approvals']);
         Route::get('/payment-proofs', [CommerceAdminController::class, 'paymentProofs']);
+        Route::get('/payment-proofs/{paymentProof}/file', [CommerceAdminController::class, 'downloadPaymentProof']);
         Route::patch('/payment-proofs/{paymentProof}/verify', [CommerceAdminController::class, 'verifyPaymentProof']);
         Route::patch('/payment-proofs/{paymentProof}/reject', [CommerceAdminController::class, 'rejectPaymentProof']);
         Route::patch('/profile-change-requests/{profileChangeRequest}/approve', [CommerceAdminController::class, 'approveProfileChange']);

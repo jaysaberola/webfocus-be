@@ -402,6 +402,21 @@ class CommerceAdminController extends Controller
         ]);
     }
 
+    public function downloadPaymentProof(Request $request, CustomerPaymentProof $paymentProof)
+    {
+        $this->resolveStaff($request);
+
+        $path = trim(str_replace('\\', '/', (string) ($paymentProof->file_path ?? '')), '/');
+        abort_if($path === '', 404, 'No file attached to this payment proof.');
+        abort_unless(Storage::disk('public')->exists($path), 404, 'Attached file was not found on the server.');
+
+        $name = trim((string) ($paymentProof->file_name ?: basename($path))) ?: 'payment-proof';
+
+        return Storage::disk('public')->response($path, $name, [
+            'Content-Disposition' => 'inline; filename="'.$name.'"',
+        ]);
+    }
+
     public function verifyPaymentProof(Request $request, CustomerPaymentProof $paymentProof)
     {
         $staff = $this->resolveStaff($request);
