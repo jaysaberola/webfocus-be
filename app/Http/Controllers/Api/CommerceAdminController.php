@@ -987,6 +987,8 @@ class CommerceAdminController extends Controller
             'email' => $customer?->email,
             'fileName' => $avatarPath ? basename($avatarPath) : '',
             'fileUrl' => StorageUrl::publicAsset($avatarPath),
+            'fileAvailable' => $avatarPath
+                && Storage::disk('public')->exists(ltrim(str_replace('\\', '/', (string) $avatarPath), '/')),
             'status' => $request->status,
             'notes' => $request->notes,
             'summary' => $request->summary,
@@ -1124,6 +1126,7 @@ class CommerceAdminController extends Controller
             'email' => $customer?->email,
             'fileName' => $proof->file_name,
             'fileUrl' => StorageUrl::publicAsset($proof->file_path),
+            'fileAvailable' => $this->resolvePaymentProofDiskPath($proof) !== null,
             'status' => $status,
             'proofStatus' => $proof->status,
             'provisioning' => $provisioning,
