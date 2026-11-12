@@ -226,14 +226,20 @@ class CustomerPortalController extends Controller
         $notes = $salesTransaction->notes;
 
         return response()->json([
-            'data' => [
-                'recordId' => $salesTransaction->id,
-                'notes' => $notes,
-                'clientNotes' => DealMeta::clientNotes($notes) ?: WebDesignMeta::clientNotes($notes),
-                'salesNotes' => DealMeta::salesNotes($notes) ?: WebDesignMeta::salesNotes($notes),
-                'conversation' => DealMeta::conversation($notes),
-                'quotedPrice' => DealMeta::quotedPrice($notes),
-            ],
+            'data' => $this->conversationPayload($salesTransaction),
+        ]);
+    }
+
+    public function markConversationSeen(Request $request, SalesTransaction $salesTransaction)
+    {
+        $customer = $this->resolveCustomer($request);
+        $this->assertCustomerOrderAccess($customer, $salesTransaction);
+
+        $notes = DealMeta::markChatSeenByClient($salesTransaction->notes);
+        $salesTransaction->update(['notes' => $notes]);
+
+        return response()->json([
+            'data' => $this->conversationPayload($salesTransaction->fresh()),
         ]);
     }
 
@@ -1391,6 +1397,22 @@ class CustomerPortalController extends Controller
         return DealMeta::pricedCatalogItem($name);
     }
 
+    private function conversationPayload(SalesTransaction $salesTransaction): array
+    {
+        $notes = $salesTransaction->notes;
+
+        return [
+            'recordId' => $salesTransaction->id,
+            'notes' => $notes,
+            'clientNotes' => DealMeta::clientNotes($notes) ?: WebDesignMeta::clientNotes($notes),
+            'salesNotes' => DealMeta::salesNotesForCustomer($notes) ?: WebDesignMeta::salesNotes($notes),
+            'conversation' => DealMeta::conversation($notes, true),
+            'quotedPrice' => DealMeta::quotedPrice($notes),
+            'seenByClientAt' => DealMeta::chatSeenByClient($notes),
+            'seenByStaffAt' => DealMeta::chatSeenByStaff($notes),
+        ];
+    }
+
     private function mapOrder(SalesTransaction $row): array
     {
         $firstItem = $row->items->first();
@@ -1478,8 +1500,10 @@ class CustomerPortalController extends Controller
             'subscriptionEndDate' => $subscriptionEnd,
             'daysUntilSubscriptionEnd' => $daysUntilSubscriptionEnd,
             'clientNotes' => DealMeta::clientNotes($row->notes) ?: WebDesignMeta::clientNotes($row->notes),
-            'salesNotes' => DealMeta::salesNotes($row->notes) ?: WebDesignMeta::salesNotes($row->notes),
-            'conversation' => DealMeta::conversation($row->notes),
+            'salesNotes' => DealMeta::salesNotesForCustomer($row->notes) ?: WebDesignMeta::salesNotes($row->notes),
+            'conversation' => DealMeta::conversation($row->notes, true),
+            'seenByClientAt' => DealMeta::chatSeenByClient($row->notes),
+            'seenByStaffAt' => DealMeta::chatSeenByStaff($row->notes),
             'quotedPrice' => DealMeta::quotedPrice($row->notes)
                 ?: (WebDesignQuotation::isWebDesign($row) ? round((float) $row->grand_total, 2) : 0),
             'total' => $amount,
@@ -1903,9 +1927,9 @@ class CustomerPortalController extends Controller
                 ? (DealMeta::clientNotes($replyOrder->notes) ?: WebDesignMeta::clientNotes($replyOrder->notes))
                 : null,
             'salesNotes' => $replyOrder
-                ? (DealMeta::salesNotes($replyOrder->notes) ?: WebDesignMeta::salesNotes($replyOrder->notes))
+                ? (DealMeta::salesNotesForCustomer($replyOrder->notes) ?: WebDesignMeta::salesNotes($replyOrder->notes))
                 : null,
-            'conversation' => $replyOrder ? DealMeta::conversation($replyOrder->notes) : [],
+            'conversation' => $replyOrder ? DealMeta::conversation($replyOrder->notes, true) : [],
             'quotedPrice' => $replyOrder
                 ? (DealMeta::quotedPrice($replyOrder->notes)
                     ?: (WebDesignQuotation::isWebDesign($replyOrder) ? round((float) $replyOrder->grand_total, 2) : 0))

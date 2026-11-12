@@ -59,6 +59,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/orders/{salesTransaction}/cancel', [CustomerPortalController::class, 'cancelOrder']);
         Route::post('/orders/{salesTransaction}/notes', [CustomerPortalController::class, 'replyOrder']);
         Route::get('/orders/{salesTransaction}/conversation', [CustomerPortalController::class, 'conversation']);
+        Route::post('/orders/{salesTransaction}/conversation/seen', [CustomerPortalController::class, 'markConversationSeen']);
         Route::get('/orders/{salesTransaction}/files', [CustomerPortalController::class, 'downloadConversationFile']);
         Route::patch('/orders/{salesTransaction}/items', [CustomerPortalController::class, 'updateOrderItems']);
         Route::get('/billing', [CustomerPortalController::class, 'billing']);
@@ -127,6 +128,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/sales-transactions/{salesTransaction}/price-request', [SalesTransactionController::class, 'requestDealPrice']);
     Route::post('/sales-transactions/{salesTransaction}/notes', [SalesTransactionController::class, 'replyConversation']);
     Route::get('/sales-transactions/{salesTransaction}/conversation', [SalesTransactionController::class, 'conversation']);
+    Route::post('/sales-transactions/{salesTransaction}/conversation/seen', [SalesTransactionController::class, 'markConversationSeen']);
     Route::get('/sales-transactions/{salesTransaction}/files', [SalesTransactionController::class, 'downloadConversationFile']);
     Route::get('/customers', [CustomerController::class, 'index']);
     Route::post('/customers', [CustomerController::class, 'store']);

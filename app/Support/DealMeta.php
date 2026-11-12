@@ -514,15 +514,92 @@ class DealMeta
         return self::replaceMeta($text, $meta);
     }
 
+    public static function isFinanceRfqChatText(string $text, string $from = 'sales'): bool
+    {
+        if ($from !== 'sales') {
+            return false;
+        }
+        $t = trim($text);
+        if ($t === '') {
+            return false;
+        }
+        if (preg_match('/^Price request:/i', $t)) {
+            return true;
+        }
+        if (preg_match('/^Deal lines needing catalog amount:/i', $t)) {
+            return true;
+        }
+        if (preg_match('/Request for quotation \(specs\)/i', $t)) {
+            return true;
+        }
+        $markers = [
+            'Client Name:',
+            'Deal Name:',
+            'Data Center:',
+            'Processor:',
+            'Cores:',
+            'Threads:',
+            'RAM:',
+            'Storage:',
+            'Annual SRP (net, excl. VAT):',
+            'Gross Amount (incl. 12% VAT):',
+            'Annual SRP: pending (Finance to set)',
+        ];
+        $hits = 0;
+        foreach ($markers as $marker) {
+            if (str_contains($t, $marker)) {
+                $hits++;
+            }
+        }
+        if ($hits >= 4) {
+            return true;
+        }
+        if ($hits >= 2 && (preg_match('/Annual SRP/i', $t) || preg_match('/Gross Amount/i', $t))) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public static function isInternalPriceRequestText(string $text): bool
+    {
+        return self::isFinanceRfqChatText($text);
+    }
+
+    /**
+     * @param  array{from?: string, text?: string, internal?: bool}  $row
+     */
+    public static function isCustomerVisibleChatMessage(array $row): bool
+    {
+        $text = trim((string) ($row['text'] ?? ''));
+        if ($text === '') {
+            return false;
+        }
+        if (! empty($row['internal'])) {
+            return false;
+        }
+        $from = ($row['from'] ?? '') === 'sales' ? 'sales' : 'client';
+        if (self::isFinanceRfqChatText($text, $from)) {
+            return false;
+        }
+
+        return true;
+    }
+
     /**
      * @return list<array{from: string, text: string, at?: string, file?: array{name: string, url: string, kind: string}}>
      */
-    public static function conversation(?string $notes): array
+    public static function conversation(?string $notes, bool $customerVisible = false): array
     {
         $meta = self::parse($notes);
         $raw = $meta['conversation'] ?? null;
         if (is_array($raw) && $raw !== []) {
-            return self::normalizeConversation($raw);
+            $messages = self::normalizeConversation($raw);
+            if ($customerVisible) {
+                $messages = array_values(array_filter($messages, fn ($row) => self::isCustomerVisibleChatMessage($row)));
+            }
+
+            return $messages;
         }
 
         $messages = [];
@@ -533,7 +610,7 @@ class DealMeta
         foreach (preg_split('/\n{2,}/', $client) ?: [] as $text) {
             $text = trim((string) $text);
             if ($text !== '') {
-                $messages[] = ['from' => 'client', 'text' => $text];
+                $messages[] = self::legacyNoteToMessage('client', $text);
             }
         }
         $sales = self::salesNotes($notes);
@@ -543,11 +620,111 @@ class DealMeta
         foreach (preg_split('/\n{2,}/', $sales) ?: [] as $text) {
             $text = trim((string) $text);
             if ($text !== '') {
-                $messages[] = ['from' => 'sales', 'text' => $text];
+                $messages[] = self::legacyNoteToMessage('sales', $text);
             }
         }
 
+        if ($customerVisible) {
+            $messages = array_values(array_filter($messages, fn ($row) => self::isCustomerVisibleChatMessage($row)));
+        }
+
         return $messages;
+    }
+
+    public static function salesNotesForCustomer(?string $notes): string
+    {
+        $parts = [];
+        foreach (self::conversation($notes, true) as $row) {
+            if (($row['from'] ?? '') === 'sales') {
+                $parts[] = $row['text'];
+            }
+        }
+
+        return implode("\n\n", $parts);
+    }
+
+    /**
+     * Record an internal Finance price request — not added to client-visible deal chat.
+     */
+    public static function recordPriceRequest(
+        ?string $notes,
+        string $message,
+        int $assigneeId,
+        int $requestedByUserId,
+        ?int $dealCreatedByUserId = null,
+    ): string {
+        $message = trim($message);
+        $meta = self::parse($notes);
+        $log = is_array($meta['priceRequestLog'] ?? null) ? $meta['priceRequestLog'] : [];
+        $log[] = [
+            'at' => now()->toIso8601String(),
+            'by' => $requestedByUserId,
+            'assigneeId' => $assigneeId,
+            'message' => $message,
+        ];
+
+        return self::merge([
+            'priceRequestLog' => $log,
+            'pricingWorkflowStatus' => self::PRICING_AWAITING,
+            'priceAssigneeId' => $assigneeId,
+            'priceRequestedByUserId' => $requestedByUserId,
+            'priceRequestedAt' => now()->toIso8601String(),
+            'dealCreatedByUserId' => (int) ($dealCreatedByUserId
+                ?: ($meta['dealCreatedByUserId'] ?? 0)),
+        ], $notes);
+    }
+
+    public static function chatSeenByClient(?string $notes): ?string
+    {
+        $value = trim((string) (self::parse($notes)['chatSeenByClientAt'] ?? ''));
+
+        return $value !== '' ? $value : null;
+    }
+
+    public static function chatSeenByStaff(?string $notes): ?string
+    {
+        $value = trim((string) (self::parse($notes)['chatSeenByStaffAt'] ?? ''));
+
+        return $value !== '' ? $value : null;
+    }
+
+    public static function markChatSeenByClient(?string $notes): string
+    {
+        return self::merge(['chatSeenByClientAt' => now()->toIso8601String()], $notes);
+    }
+
+    public static function markChatSeenByStaff(?string $notes): string
+    {
+        return self::merge(['chatSeenByStaffAt' => now()->toIso8601String()], $notes);
+    }
+
+    /**
+     * @return array{from: string, text: string, at?: string}
+     */
+    private static function legacyNoteToMessage(string $from, string $text): array
+    {
+        $from = $from === 'sales' ? 'sales' : 'client';
+        $body = $text;
+        $at = null;
+
+        if (preg_match('/^(\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2})\s*[—–-]\s*(.*)$/su', $text, $matches)) {
+            try {
+                $at = \Carbon\Carbon::parse($matches[1], config('app.timezone'))->toIso8601String();
+            } catch (\Throwable) {
+                $at = null;
+            }
+            $stripped = trim((string) ($matches[2] ?? ''));
+            if ($stripped !== '') {
+                $body = $stripped;
+            }
+        }
+
+        $message = ['from' => $from, 'text' => $body];
+        if (is_string($at) && $at !== '') {
+            $message['at'] = $at;
+        }
+
+        return $message;
     }
 
     /**
@@ -957,12 +1134,26 @@ class DealMeta
     /**
      * @param  iterable<mixed>|null  $items
      */
+    public static function quoteAnnualSrpAmount(?string $notes): float
+    {
+        $raw = trim((string) (self::parse($notes)['quoteAnnualSrp'] ?? ''));
+        if ($raw === '') {
+            return 0.0;
+        }
+        $clean = preg_replace('/[^\d.]/', '', str_replace(',', '', $raw));
+        $amount = (float) $clean;
+
+        return $amount > 0 ? $amount : 0.0;
+    }
+
     public static function hasMissingCatalogPrices(?string $notes, $items = null): bool
     {
         $amounts = self::amountMap($notes, 'dealAmounts');
         if ($items === null) {
             return $amounts === [];
         }
+
+        $missingCount = 0;
 
         foreach ($items as $item) {
             $name = trim((string) (is_array($item) ? ($item['name'] ?? '') : ($item->name ?? '')));
@@ -972,11 +1163,15 @@ class DealMeta
             $lineTotal = round((float) (is_array($item) ? ($item['total_price'] ?? $item['price'] ?? 0) : ($item->total_price ?? $item->price ?? 0)), 2);
             $metaAmount = self::amountFor($amounts, $name);
             if ($lineTotal <= 0 && $metaAmount <= 0) {
-                return true;
+                $missingCount++;
             }
         }
 
-        return false;
+        if ($missingCount > 0 && self::quoteAnnualSrpAmount($notes) > 0) {
+            return false;
+        }
+
+        return $missingCount > 0;
     }
 
     public static function syncPricingWorkflowStatus(?string $notes, bool $isDraft, bool $hasMissingPrices): string
