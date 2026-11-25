@@ -656,6 +656,85 @@ class CommerceAdminController extends Controller
         ]);
     }
 
+    public function sendBulkCollectionSoa(Request $request)
+    {
+        $this->resolveStaff($request);
+
+        $validated = $request->validate([
+            'transaction_ids' => ['required', 'array', 'min:1', 'max:150'],
+            'transaction_ids.*' => ['integer', 'exists:sales_transactions,id'],
+            'message' => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $ids = array_values(array_unique(array_map('intval', $validated['transaction_ids'])));
+        $customMessage = trim((string) ($validated['message'] ?? ''));
+
+        $transactions = SalesTransaction::query()
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        $sent = 0;
+        $skipped = 0;
+        $syncCustomerIds = [];
+
+        foreach ($ids as $id) {
+            /** @var SalesTransaction|null $transaction */
+            $transaction = $transactions->get($id);
+            if (! $transaction || ! $this->transactionEligibleForCollectionSoa($transaction)) {
+                $skipped++;
+                continue;
+            }
+
+            $invoiceId = 'INV-' . $transaction->transaction_no;
+            $amount = $this->formatInboxMoney($transaction->grand_total);
+            $stamp = Carbon::now()->format('M j, Y g:i A');
+            $logLine = $customMessage !== ''
+                ? "Statement of account sent · {$customMessage} ({$stamp})"
+                : "Statement of account sent ({$stamp})";
+
+            $priorSales = DealMeta::salesNotes($transaction->notes);
+            $salesNotes = $priorSales !== '' ? "{$priorSales}\n{$logLine}" : $logLine;
+            $notes = DealMeta::withConversation($transaction->notes, null, $salesNotes);
+            $notes = DealMeta::merge(['collectionNote' => 'SOA sent'], $notes);
+
+            $transaction->update(['notes' => $notes]);
+
+            $body = $customMessage !== ''
+                ? "{$customMessage} — {$invoiceId} · {$amount} due. Open Billing to review your statement."
+                : "Your statement of account for {$invoiceId} is ready ({$amount} due). Open Billing to pay or download details.";
+
+            CustomerNotification::query()->updateOrCreate(
+                [
+                    'customer_id' => $transaction->customer_id,
+                    'reference_key' => 'soa:txn:' . $transaction->id,
+                ],
+                [
+                    'title' => 'Statement of Account',
+                    'body' => $body,
+                    'type' => 'billing',
+                    'action_url' => '/public/dashboard?tab=billing',
+                    'read_at' => null,
+                ],
+            );
+
+            $syncCustomerIds[(int) $transaction->customer_id] = true;
+            $sent++;
+        }
+
+        foreach (array_keys($syncCustomerIds) as $customerId) {
+            app(CustomerPortalNotificationSync::class)->syncForCustomer($customerId);
+        }
+
+        return response()->json([
+            'message' => $sent > 0
+                ? "{$sent} statement" . ($sent === 1 ? '' : 's') . ' of account sent to client portal inbox.'
+                : 'No statements were sent. Selected invoices may already be paid or missing a client account.',
+            'sent' => $sent,
+            'skipped' => $skipped,
+        ]);
+    }
+
     public function tickets(Request $request)
     {
         $this->resolveStaff($request);
@@ -1427,6 +1506,25 @@ class CommerceAdminController extends Controller
     private function formatInboxMoney($amount): string
     {
         return '₱' . number_format((float) $amount, 2);
+    }
+
+    private function transactionEligibleForCollectionSoa(SalesTransaction $transaction): bool
+    {
+        if (! (int) $transaction->customer_id) {
+            return false;
+        }
+
+        $payment = strtolower(trim((string) $transaction->payment_status));
+        if (in_array($payment, ['paid', 'completed', 'success'], true)) {
+            return false;
+        }
+
+        $order = strtolower(trim((string) $transaction->order_status));
+        if (in_array($order, ['cancelled', 'canceled', 'draft'], true)) {
+            return false;
+        }
+
+        return true;
     }
 
     private function mapStaffInboxAlert(CustomerNotification $row, $proofs, $profiles, $tickets, $inquiries, $orders, $provisioningActions = null): array

@@ -89,6 +89,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/payment-proofs/{paymentProof}/file', [CommerceAdminController::class, 'downloadPaymentProof']);
         Route::patch('/payment-proofs/{paymentProof}/verify', [CommerceAdminController::class, 'verifyPaymentProof']);
         Route::patch('/payment-proofs/{paymentProof}/reject', [CommerceAdminController::class, 'rejectPaymentProof']);
+        Route::post('/collection-queue/bulk-soa', [CommerceAdminController::class, 'sendBulkCollectionSoa']);
         Route::patch('/profile-change-requests/{profileChangeRequest}/approve', [CommerceAdminController::class, 'approveProfileChange']);
         Route::patch('/profile-change-requests/{profileChangeRequest}/reject', [CommerceAdminController::class, 'rejectProfileChange']);
         Route::get('/tickets', [CommerceAdminController::class, 'tickets']);
